@@ -95,6 +95,38 @@ def strip_location_clause(name: str, *, city: str | None, state: str | None,
     return ", ".join(segs).strip()
 
 
+# Legal-entity suffixes (norm_key'd forms). Dotted abbrevs like "L.L.C." become
+# "l l c" after norm_key, so multi-token forms are matched explicitly. The very
+# ambiguous 2-letter national forms (sa/ag/ab/as/oy/bv/nv/kk) are intentionally
+# EXCLUDED from this first measurement to keep the suffix signal clean.
+_SUFFIX_SINGLE = {
+    "inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation",
+    "company", "co", "plc", "llp", "lp", "pllc", "gmbh", "pte", "pty", "pvt",
+}
+_SUFFIX_MULTI = [("l", "l", "c"), ("l", "l", "p")]  # L.L.C. / L.L.P.
+
+
+def strip_corporate_suffix(key: str) -> str:
+    """Strip trailing legal-entity suffix tokens from a norm_key'd string,
+    repeatedly ("foo co ltd" -> "foo"). Never empties: keeps >=1 token."""
+    toks = key.split()
+    changed = True
+    while changed and len(toks) > 1:
+        changed = False
+        for mt in _SUFFIX_MULTI:
+            n = len(mt)
+            if len(toks) > n and tuple(toks[-n:]) == mt:
+                del toks[-n:]
+                changed = True
+                break
+        if changed:
+            continue
+        if len(toks) > 1 and toks[-1] in _SUFFIX_SINGLE:
+            toks.pop()
+            changed = True
+    return " ".join(toks)
+
+
 def _collapse_repeated_tail_tokens(text: str) -> str:
     """Collapse an immediately-repeated trailing token: "nu skin singapore
     singapore" -> "nu skin singapore". Conservative: only the final token, only
@@ -107,13 +139,19 @@ def _collapse_repeated_tail_tokens(text: str) -> str:
 
 def enhanced_key(name: str | None, *, city: str | None = None,
                  state: str | None = None, country: str | None = None,
-                 base_vocab: frozenset[str] = frozenset()) -> str:
-    """The experimental dedup key. Falls back to plain norm_key for empty/odd
-    input so it can never produce an empty key for a non-empty name."""
+                 base_vocab: frozenset[str] = frozenset(),
+                 strip_location: bool = True, strip_suffix: bool = False) -> str:
+    """The experimental dedup key, composable so each rule can be measured in
+    isolation. `strip_location` removes redundant trailing geography;
+    `strip_suffix` removes legal-entity suffixes. Falls back to plain norm_key
+    so it never produces an empty key for a non-empty name."""
     if not name:
         return ""
-    stripped = strip_location_clause(name, city=city, state=state,
-                                     country=country, base_vocab=base_vocab)
-    key = norm_key(stripped)
-    key = _collapse_repeated_tail_tokens(key)
+    s = name
+    if strip_location:
+        s = strip_location_clause(s, city=city, state=state,
+                                  country=country, base_vocab=base_vocab)
+    key = _collapse_repeated_tail_tokens(norm_key(s))
+    if strip_suffix:
+        key = strip_corporate_suffix(key)
     return key or norm_key(name)  # never collapse a real name to empty
