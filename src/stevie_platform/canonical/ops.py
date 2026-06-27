@@ -1,0 +1,185 @@
+"""
+Canonical DB operations — connection-scoped (the pipeline runs each record in
+one transaction). Deterministic upserts for dimensions/entities, trgm candidate
+generation, recognition assembly, and ledger writes.
+
+Table names interpolated below come ONLY from internal whitelists, never user
+input — safe.
+"""
+from __future__ import annotations
+
+import uuid
+
+from stevie_platform.canonical.normalize import edition_slug, slugify
+
+_SIMPLE = {"countries", "industries", "programs", "category_definitions"}
+
+
+async def truncate_canonical(conn) -> None:
+    """Canonical is a pure projection of parsed_records — safe to rebuild."""
+    await conn.execute(
+        "truncate recognitions, recognition_parties, parties, organizations, "
+        "people, programs, program_editions, category_definitions, "
+        "category_groups, categories, countries, industries, entity_links, "
+        "entity_candidates restart identity cascade"
+    )
+
+
+async def _unique_slug(conn, table: str, base: str) -> str:
+    cur = await conn.execute(f"select 1 from {table} where slug = %s", (base,))
+    if not await cur.fetchone():
+        return base
+    i = 2
+    while True:
+        cand = f"{base}-{i}"
+        cur = await conn.execute(f"select 1 from {table} where slug = %s", (cand,))
+        if not await cur.fetchone():
+            return cand
+        i += 1
+
+
+async def get_or_create_simple(conn, table: str, norm_key: str, name: str) -> tuple[int, bool]:
+    assert table in _SIMPLE
+    cur = await conn.execute(f"select id from {table} where norm_key = %s", (norm_key,))
+    if row := await cur.fetchone():
+        return row["id"], False
+    slug = await _unique_slug(conn, table, slugify(name))
+    cur = await conn.execute(
+        f"insert into {table} (norm_key, slug, name) values (%s,%s,%s) returning id",
+        (norm_key, slug, name),
+    )
+    return (await cur.fetchone())["id"], True
+
+
+async def get_or_create_edition(conn, program_id: int, year: int, program_name: str) -> tuple[int, bool]:
+    cur = await conn.execute(
+        "select id from program_editions where program_id = %s and year = %s",
+        (program_id, year),
+    )
+    if row := await cur.fetchone():
+        return row["id"], False
+    slug = await _unique_slug(conn, "program_editions", edition_slug(program_name, year))
+    cur = await conn.execute(
+        "insert into program_editions (program_id, year, slug) values (%s,%s,%s) returning id",
+        (program_id, year, slug),
+    )
+    return (await cur.fetchone())["id"], True
+
+
+async def get_or_create_group(conn, edition_id: int, norm_key: str, name: str) -> tuple[int, bool]:
+    cur = await conn.execute(
+        "select id from category_groups where program_edition_id = %s and norm_key = %s",
+        (edition_id, norm_key),
+    )
+    if row := await cur.fetchone():
+        return row["id"], False
+    slug = await _unique_slug(conn, "category_groups", slugify(name))
+    cur = await conn.execute(
+        "insert into category_groups (program_edition_id, norm_key, slug, name) "
+        "values (%s,%s,%s,%s) returning id",
+        (edition_id, norm_key, slug, name),
+    )
+    return (await cur.fetchone())["id"], True
+
+
+async def get_or_create_category(conn, edition_id: int, group_id: int | None,
+                                 definition_id: int, norm_key: str, name: str) -> tuple[int, bool]:
+    cur = await conn.execute(
+        "select id from categories where program_edition_id = %s and norm_key = %s",
+        (edition_id, norm_key),
+    )
+    if row := await cur.fetchone():
+        return row["id"], False
+    slug = await _unique_slug(conn, "categories", slugify(name))
+    cur = await conn.execute(
+        "insert into categories (program_edition_id, category_group_id, definition_id, "
+        "norm_key, slug, name) values (%s,%s,%s,%s,%s,%s) returning id",
+        (edition_id, group_id, definition_id, norm_key, slug, name),
+    )
+    return (await cur.fetchone())["id"], True
+
+
+async def get_or_create_org(conn, norm_key: str, name: str) -> tuple[int, bool]:
+    cur = await conn.execute("select id from organizations where norm_key = %s", (norm_key,))
+    if row := await cur.fetchone():
+        return row["id"], False
+    slug = await _unique_slug(conn, "organizations", slugify(name))
+    cur = await conn.execute(
+        "insert into organizations (norm_key, slug, name) values (%s,%s,%s) returning id",
+        (norm_key, slug, name),
+    )
+    return (await cur.fetchone())["id"], True
+
+
+async def party_for_org(conn, org_id: int) -> int:
+    cur = await conn.execute("select id from parties where organization_id = %s", (org_id,))
+    if row := await cur.fetchone():
+        return row["id"]
+    cur = await conn.execute(
+        "insert into parties (kind, organization_id) values ('organization', %s) returning id",
+        (org_id,),
+    )
+    return (await cur.fetchone())["id"]
+
+
+async def org_candidates(conn, name: str, exclude_id: int,
+                         limit: int = 5, floor: float = 0.4) -> list[tuple[int, float]]:
+    """Phase C — trgm near-matches for a freshly created org. Advisory only."""
+    cur = await conn.execute(
+        "select id, similarity(name, %s) as score from organizations "
+        "where id <> %s and name %% %s order by score desc limit %s",
+        (name, exclude_id, name, limit),
+    )
+    return [(r["id"], float(r["score"])) for r in await cur.fetchall()
+            if r["score"] and r["score"] >= floor]
+
+
+async def add_candidate(conn, parsed_record_id: int, raw_value: str, candidate_id: int,
+                        score: float, crawl_run_id: uuid.UUID, algorithm: str = "trgm",
+                        entity_type: str = "organization") -> None:
+    await conn.execute(
+        "insert into entity_candidates (parsed_record_id, entity_type, raw_value, "
+        "candidate_entity_id, score, algorithm, crawl_run_id) values (%s,%s,%s,%s,%s,%s,%s)",
+        (parsed_record_id, entity_type, raw_value, candidate_id, score, algorithm, str(crawl_run_id)),
+    )
+
+
+async def write_link(conn, parsed_record_id: int, crawl_run_id: uuid.UUID, entity_type: str,
+                     entity_id: int, raw_value: str, method: str, parser_version: str,
+                     score: float | None = None) -> None:
+    await conn.execute(
+        "insert into entity_links (parsed_record_id, crawl_run_id, entity_type, entity_id, "
+        "raw_value, match_method, match_score, parser_version) values (%s,%s,%s,%s,%s,%s,%s,%s)",
+        (parsed_record_id, str(crawl_run_id), entity_type, entity_id, raw_value, method,
+         score, parser_version),
+    )
+
+
+async def insert_recognition(conn, *, parsed_record_id: int, node_id: str,
+                             crawl_run_id: uuid.UUID, fields: dict) -> int:
+    cur = await conn.execute(
+        """insert into recognitions
+             (parsed_record_id, node_id, crawl_run_id, program_edition_id, year,
+              category_id, category_group_id, category_definition_id, country_id,
+              industry_id, entrant_party_id, submitter_party_id, recipient_party_id,
+              result_level, award_raw, nomination_title, city, state_province,
+              submitting_agency_raw, notes)
+           values (%(parsed_record_id)s,%(node_id)s,%(crawl_run_id)s,%(program_edition_id)s,
+              %(year)s,%(category_id)s,%(category_group_id)s,%(category_definition_id)s,
+              %(country_id)s,%(industry_id)s,%(entrant_party_id)s,%(submitter_party_id)s,
+              %(recipient_party_id)s,%(result_level)s,%(award_raw)s,%(nomination_title)s,
+              %(city)s,%(state_province)s,%(submitting_agency_raw)s,%(notes)s)
+           returning id""",
+        {"parsed_record_id": parsed_record_id, "node_id": node_id,
+         "crawl_run_id": str(crawl_run_id), **fields},
+    )
+    return (await cur.fetchone())["id"]
+
+
+async def add_recognition_party(conn, recognition_id: int, party_id: int, role: str,
+                                raw_value: str | None) -> None:
+    await conn.execute(
+        "insert into recognition_parties (recognition_id, party_id, role, raw_value) "
+        "values (%s,%s,%s,%s) on conflict (recognition_id, party_id, role) do nothing",
+        (recognition_id, party_id, role, raw_value),
+    )

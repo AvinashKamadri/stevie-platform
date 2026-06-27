@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.env
+.pytest_cache/
+dist/
+build/
+*.log
+proxies.txt
+
+# Frozen DB snapshots: large binary dumps live outside git (back them up
+# separately). The MANIFEST.md + SHA256SUMS beside them ARE tracked.
+snapshots/**/*.dump
+snapshots/**/dump.err
