@@ -1,6 +1,7 @@
 from stevie_platform.canonical.normalize import (
     build_location_vocab, edition_slug, location_dedup_key,
-    location_display_name, norm_key, slugify,
+    location_display_name, norm_key, normalize_org, slugify,
+    split_legal_suffix, strip_corporate_suffix,
 )
 
 _VOCAB = build_location_vocab(["United States", "Singapore", "Australia",
@@ -85,3 +86,39 @@ def test_location_display_name_is_clean():
     assert location_display_name("Cisco Systems, Inc., San Jose, CA",
                                  city="San Jose", state="CA",
                                  vocab=_VOCAB) == "Cisco Systems, Inc."
+
+
+# --- suffix rule + brand-level normalization ---------------------------------
+
+def test_strip_corporate_suffix_repeats_and_multitoken():
+    assert strip_corporate_suffix("cisco systems inc") == "cisco systems"
+    assert strip_corporate_suffix("foo co ltd") == "foo"
+    assert strip_corporate_suffix("acme l l c") == "acme"
+    assert strip_corporate_suffix("company") == "company"  # never empties
+
+
+def test_split_legal_suffix_preserves_casing():
+    assert split_legal_suffix("Cisco Systems, Inc.") == ("Cisco Systems", "Inc.")
+    assert split_legal_suffix("Samsung Electronics Co., Ltd") == \
+        ("Samsung Electronics", "Co. Ltd")
+    assert split_legal_suffix("USHEALTH Advisors, L.L.C.") == \
+        ("USHEALTH Advisors", "L.L.C.")
+    assert split_legal_suffix("Tata Consultancy Services") == \
+        ("Tata Consultancy Services", "")
+
+
+def test_normalize_org_full_brand_level():
+    # location + suffix stripped for the key; display cleaned; suffix preserved
+    assert normalize_org("Cisco Systems, Inc., San Jose, CA", city="San Jose",
+                         state="CA", country="United States", vocab=_VOCAB) == \
+        ("cisco systems", "Cisco Systems", "Inc.")
+    assert normalize_org("IBM", vocab=_VOCAB) == ("ibm", "IBM", None)
+    # cross-jurisdiction variants converge on the same brand key
+    k1, _, _ = normalize_org("Cisco Systems", vocab=_VOCAB)
+    k2, _, s2 = normalize_org("Cisco Systems Pvt Ltd", vocab=_VOCAB)
+    assert k1 == k2 == "cisco systems"
+    assert s2 == "Pvt Ltd"
+
+
+def test_normalize_org_never_empty_key():
+    assert normalize_org("LLC", vocab=_VOCAB)[0] == "llc"  # name that is only a suffix

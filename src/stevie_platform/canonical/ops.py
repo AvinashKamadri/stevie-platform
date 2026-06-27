@@ -99,14 +99,17 @@ async def get_or_create_category(conn, edition_id: int, group_id: int | None,
     return (await cur.fetchone())["id"], True
 
 
-async def get_or_create_org(conn, norm_key: str, name: str) -> tuple[int, bool]:
+async def get_or_create_org(conn, norm_key: str, name: str, *,
+                            raw_name: str | None = None,
+                            legal_suffix: str | None = None) -> tuple[int, bool]:
     cur = await conn.execute("select id from organizations where norm_key = %s", (norm_key,))
     if row := await cur.fetchone():
         return row["id"], False
     slug = await _unique_slug(conn, "organizations", slugify(name))
     cur = await conn.execute(
-        "insert into organizations (norm_key, slug, name) values (%s,%s,%s) returning id",
-        (norm_key, slug, name),
+        "insert into organizations (norm_key, slug, name, raw_name, legal_suffix) "
+        "values (%s,%s,%s,%s,%s) returning id",
+        (norm_key, slug, name, raw_name, legal_suffix),
     )
     return (await cur.fetchone())["id"], True
 

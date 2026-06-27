@@ -22,7 +22,7 @@ from collections import defaultdict
 from stevie_platform import db
 from stevie_platform.canonical import ops
 from stevie_platform.canonical.normalize import (
-    build_location_vocab, location_dedup_key, location_display_name, norm_key,
+    build_location_vocab, norm_key, normalize_org,
 )
 from stevie_platform.parsing.parse import PARSER_VERSION
 
@@ -137,19 +137,18 @@ async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab) -> None:
     org_raw = d.get("organization_name")
     entrant_party = None
     if org_raw:
-        # Location rule: dedup on the location-stripped key, store the cleaned
-        # display name. Uses THIS record's structured city/state/country.
-        nk = location_dedup_key(org_raw, city=d.get("city"),
-                                state=d.get("state_province"),
-                                country=d.get("country"), vocab=vocab)
-        disp = location_display_name(org_raw, city=d.get("city"),
-                                     state=d.get("state_province"),
-                                     country=d.get("country"), vocab=vocab)
+        # Brand-level normalization (location + suffix rules). Dedup on nk;
+        # store cleaned display name, original raw_name, and legal_suffix.
+        # Uses THIS record's structured city/state/country for location.
+        nk, disp, legal_suffix = normalize_org(
+            org_raw, city=d.get("city"), state=d.get("state_province"),
+            country=d.get("country"), vocab=vocab)
         okey = ("org", nk)
         if okey in cache:
             org_id, created = cache[okey], False
         else:
-            org_id, created = await ops.get_or_create_org(conn, nk, disp)
+            org_id, created = await ops.get_or_create_org(
+                conn, nk, disp, raw_name=org_raw, legal_suffix=legal_suffix)
             cache[okey] = org_id
         if created:
             m["organization:created"] += 1
@@ -169,13 +168,13 @@ async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab) -> None:
         # The record's city/state/country describe the ENTRANT, not the agency,
         # so only the gazetteer (states/countries) is applied here — no
         # per-record location, to avoid wrongly stripping the agency's name.
-        nk = location_dedup_key(agency, vocab=vocab)
-        disp = location_display_name(agency, vocab=vocab)
+        nk, disp, legal_suffix = normalize_org(agency, vocab=vocab)
         akey = ("org", nk)
         if akey in cache:
             ag_id = cache[akey]
         else:
-            ag_id, ag_created = await ops.get_or_create_org(conn, nk, disp)
+            ag_id, ag_created = await ops.get_or_create_org(
+                conn, nk, disp, raw_name=agency, legal_suffix=legal_suffix)
             cache[akey] = ag_id
             if ag_created:
                 m["organization:created"] += 1

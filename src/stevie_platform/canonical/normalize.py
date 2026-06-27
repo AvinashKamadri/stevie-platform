@@ -139,3 +139,83 @@ def location_display_name(name, *, city=None, state=None, country=None,
         return name
     return strip_location_clause(name, city=city, state=state,
                                  country=country, vocab=vocab) or name
+
+
+# --- Corporate-suffix normalization (Phase D — the "suffix rule") ------------
+# This platform models brands, not registered legal entities, so the dedup key
+# ignores legal-entity suffixes ("Cisco Systems Inc" == "Cisco Systems"). The
+# stripped form is NOT discarded — it is preserved as `legal_suffix` metadata
+# (and per-occurrence raw names remain in recognition_parties.raw_value), so
+# legal-entity reporting stays possible later. Evidence + the finite review of
+# cross-legal-form merges: experiments/org_normalization.
+
+_SUFFIX_SINGLE = {
+    "inc", "incorporated", "llc", "ltd", "limited", "corp", "corporation",
+    "company", "co", "plc", "llp", "lp", "pllc", "gmbh", "pte", "pty", "pvt",
+}
+_SUFFIX_MULTI = [("l", "l", "c"), ("l", "l", "p")]      # L.L.C. / L.L.P. in key form
+_SUFFIX_MULTI_JOINED = {"l l c", "l l p"}                # same, as a single display token
+
+
+def strip_corporate_suffix(key: str) -> str:
+    """Strip trailing legal-entity suffix tokens from a norm_key'd string,
+    repeatedly ("foo co ltd" -> "foo"). Never empties (keeps >=1 token)."""
+    toks = key.split()
+    changed = True
+    while changed and len(toks) > 1:
+        changed = False
+        for mt in _SUFFIX_MULTI:
+            n = len(mt)
+            if len(toks) > n and tuple(toks[-n:]) == mt:
+                del toks[-n:]
+                changed = True
+                break
+        if changed:
+            continue
+        if len(toks) > 1 and toks[-1] in _SUFFIX_SINGLE:
+            toks.pop()
+            changed = True
+    return " ".join(toks)
+
+
+def split_legal_suffix(display_name: str) -> tuple[str, str]:
+    """Split a (location-stripped) display name into (core, legal_suffix),
+    preserving original casing/punctuation. "Samsung Electronics Co., Ltd" ->
+    ("Samsung Electronics", "Co. Ltd"). Never returns an empty core."""
+    if not display_name:
+        return display_name or "", ""
+    s = display_name
+    peeled: list[str] = []
+    while True:
+        s = s.rstrip(" ,")
+        m = re.search(r"([^\s,]+)$", s)
+        if not m:
+            break
+        tok = m.group(1)
+        nk = norm_key(tok)
+        prefix = s[:m.start()].rstrip(" ,")
+        if (nk in _SUFFIX_SINGLE or nk in _SUFFIX_MULTI_JOINED) and prefix:
+            peeled.insert(0, tok)
+            s = prefix
+        else:
+            break
+    core = s.rstrip(" ,").strip()
+    return (core or display_name.strip()), " ".join(peeled)
+
+
+def normalize_org(name, *, city=None, state=None, country=None,
+                  vocab=frozenset()) -> tuple[str, str, str | None]:
+    """Full brand-level org normalization. Returns
+    (norm_key, display_name, legal_suffix):
+      norm_key     — dedup key, location + legal-suffix stripped
+      display_name — cleaned, original casing, suffix removed
+      legal_suffix — the stripped legal form (or None)
+    The original raw string is the caller's to preserve (raw_name)."""
+    if not name:
+        return "", name or "", None
+    loc_display = strip_location_clause(name, city=city, state=state,
+                                        country=country, vocab=vocab) or name
+    core, suffix = split_legal_suffix(loc_display)
+    core = core.strip() or loc_display.strip() or name.strip()
+    key = _collapse_repeated_tail_tokens(norm_key(core)) or norm_key(name)
+    return key, core, (suffix or None)
