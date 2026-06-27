@@ -21,7 +21,9 @@ from collections import defaultdict
 
 from stevie_platform import db
 from stevie_platform.canonical import ops
-from stevie_platform.canonical.normalize import norm_key
+from stevie_platform.canonical.normalize import (
+    build_location_vocab, norm_key, normalize_org,
+)
 from stevie_platform.parsing.parse import PARSER_VERSION
 
 
@@ -82,7 +84,7 @@ async def _simple(conn, table, raw, entity_type, cache, m, run_id, pid, pv):
     return eid
 
 
-async def _process(conn, run_id, pid, node, d, pv, cache, m) -> None:
+async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab) -> None:
     # --- dimensions -------------------------------------------------------
     country_id  = await _simple(conn, "countries", d.get("country"), "country",
                                 cache, m, run_id, pid, pv)
@@ -135,12 +137,18 @@ async def _process(conn, run_id, pid, node, d, pv, cache, m) -> None:
     org_raw = d.get("organization_name")
     entrant_party = None
     if org_raw:
-        nk = norm_key(org_raw)
+        # Brand-level normalization (location + suffix rules). Dedup on nk;
+        # store cleaned display name, original raw_name, and legal_suffix.
+        # Uses THIS record's structured city/state/country for location.
+        nk, disp, legal_suffix = normalize_org(
+            org_raw, city=d.get("city"), state=d.get("state_province"),
+            country=d.get("country"), vocab=vocab)
         okey = ("org", nk)
         if okey in cache:
             org_id, created = cache[okey], False
         else:
-            org_id, created = await ops.get_or_create_org(conn, nk, org_raw)
+            org_id, created = await ops.get_or_create_org(
+                conn, nk, disp, raw_name=org_raw, legal_suffix=legal_suffix)
             cache[okey] = org_id
         if created:
             m["organization:created"] += 1
@@ -157,12 +165,16 @@ async def _process(conn, run_id, pid, node, d, pv, cache, m) -> None:
     submitter_party = None
     agency = d.get("submitting_agency")
     if agency:
-        nk = norm_key(agency)
+        # The record's city/state/country describe the ENTRANT, not the agency,
+        # so only the gazetteer (states/countries) is applied here — no
+        # per-record location, to avoid wrongly stripping the agency's name.
+        nk, disp, legal_suffix = normalize_org(agency, vocab=vocab)
         akey = ("org", nk)
         if akey in cache:
             ag_id = cache[akey]
         else:
-            ag_id, ag_created = await ops.get_or_create_org(conn, nk, agency)
+            ag_id, ag_created = await ops.get_or_create_org(
+                conn, nk, disp, raw_name=agency, legal_suffix=legal_suffix)
             cache[akey] = ag_id
             if ag_created:
                 m["organization:created"] += 1
@@ -211,6 +223,12 @@ async def canonicalize(run_id: uuid.UUID, *, fresh: bool = True) -> dict:
         rows = await cur.fetchall()
         await conn.commit()
 
+        # Location-rule gazetteer: built from the country names actually present
+        # in the data, so it's deterministic and independent of ingest order.
+        vocab = build_location_vocab(
+            {r["data"].get("country") for r in rows if r["data"].get("country")}
+        )
+
         for row in rows:
             m["normalized"] += 1
             if not row["is_complete"]:
@@ -218,7 +236,7 @@ async def canonicalize(run_id: uuid.UUID, *, fresh: bool = True) -> dict:
                 continue
             cache.mark()
             try:
-                await _process(conn, run_id, row["id"], row["node_id"], row["data"], pv, cache, m)
+                await _process(conn, run_id, row["id"], row["node_id"], row["data"], pv, cache, m, vocab)
                 await conn.commit()
                 m["recognitions_built"] += 1
             except Exception as e:  # noqa: BLE001 — isolate one bad record, keep going
