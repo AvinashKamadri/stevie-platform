@@ -203,6 +203,22 @@ def split_legal_suffix(display_name: str) -> tuple[str, str]:
     return (core or display_name.strip()), " ".join(peeled)
 
 
+def build_merge_closure(decisions: list[tuple[str, str]]) -> dict[str, str]:
+    """Resolve (loser_key, winner_key) merge edges into a flat loser->canonical map.
+
+    Follows chains (A->B, B->C => A maps to C). Cycles are broken at the
+    repeated key — the graph must be a forest, but this is defensive."""
+    direct = dict(decisions)
+    closure: dict[str, str] = {}
+    for start in direct:
+        key, seen = start, set()
+        while key in direct and key not in seen:
+            seen.add(key)
+            key = direct[key]
+        closure[start] = key
+    return closure
+
+
 def normalize_org(name, *, city=None, state=None, country=None,
                   vocab=frozenset()) -> tuple[str, str, str | None]:
     """Full brand-level org normalization. Returns

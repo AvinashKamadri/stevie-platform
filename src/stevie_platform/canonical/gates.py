@@ -37,6 +37,21 @@ GATES = [
     ("parse completeness > 99%",
      "select coalesce(100.0*count(*) filter (where is_complete)/nullif(count(*),0),0) from parsed_records",
      lambda v: v > 99, "> 99%"),
+    # --- M3 merge-graph gates -----------------------------------------------
+    # Both pass vacuously (== 0) when organization_merge_decision is empty.
+    ("no orphaned merge winners",
+     """select count(*) from organization_merge_decision omd
+        where decision = 'merge'
+          and not exists (
+              select 1 from organizations o where o.norm_key = omd.winner_key)""",
+     lambda v: v == 0, "== 0"),
+    ("alias covers all merge losers",
+     """select count(*) from organization_merge_decision omd
+        where decision = 'merge'
+          and not exists (
+              select 1 from organization_alias oa
+               where oa.alias_norm_key = omd.loser_key)""",
+     lambda v: v == 0, "== 0"),
 ]
 
 

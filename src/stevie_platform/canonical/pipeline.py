@@ -22,7 +22,7 @@ from collections import defaultdict
 from stevie_platform import db
 from stevie_platform.canonical import ops
 from stevie_platform.canonical.normalize import (
-    build_location_vocab, norm_key, normalize_org,
+    build_location_vocab, build_merge_closure, norm_key, normalize_org,
 )
 from stevie_platform.parsing.parse import PARSER_VERSION
 
@@ -84,7 +84,7 @@ async def _simple(conn, table, raw, entity_type, cache, m, run_id, pid, pv):
     return eid
 
 
-async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab) -> None:
+async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab, closure) -> None:
     # --- dimensions -------------------------------------------------------
     country_id  = await _simple(conn, "countries", d.get("country"), "country",
                                 cache, m, run_id, pid, pv)
@@ -143,6 +143,7 @@ async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab) -> None:
         nk, disp, legal_suffix = normalize_org(
             org_raw, city=d.get("city"), state=d.get("state_province"),
             country=d.get("country"), vocab=vocab)
+        nk = closure.get(nk, nk)  # apply merge decisions
         okey = ("org", nk)
         if okey in cache:
             org_id, created = cache[okey], False
@@ -169,6 +170,7 @@ async def _process(conn, run_id, pid, node, d, pv, cache, m, vocab) -> None:
         # so only the gazetteer (states/countries) is applied here — no
         # per-record location, to avoid wrongly stripping the agency's name.
         nk, disp, legal_suffix = normalize_org(agency, vocab=vocab)
+        nk = closure.get(nk, nk)  # apply merge decisions
         akey = ("org", nk)
         if akey in cache:
             ag_id = cache[akey]
@@ -216,6 +218,22 @@ async def canonicalize(run_id: uuid.UUID, *, fresh: bool = True) -> dict:
         if fresh:
             await ops.truncate_canonical(conn)
             await conn.commit()
+
+        # Load merge decisions and build the closure map once, before touching
+        # any records. The closure is a pure in-memory dict (loser_key ->
+        # canonical_key) applied in the org-resolution path so that every record
+        # mentioning a losing key resolves to the winning org row — deterministic
+        # and order-independent.
+        decisions_cur = await conn.execute(
+            "select loser_key, winner_key "
+            "from organization_merge_decision where decision = 'merge'"
+        )
+        closure = build_merge_closure(
+            [(r["loser_key"], r["winner_key"]) for r in await decisions_cur.fetchall()]
+        )
+        if closure:
+            print(f"[canonicalize] {len(closure)} merge decision(s) loaded")
+
         cur = await conn.execute(
             "select id, node_id, data, is_complete from parsed_records where parser_version = %s",
             (pv,),
@@ -236,7 +254,8 @@ async def canonicalize(run_id: uuid.UUID, *, fresh: bool = True) -> dict:
                 continue
             cache.mark()
             try:
-                await _process(conn, run_id, row["id"], row["node_id"], row["data"], pv, cache, m, vocab)
+                await _process(conn, run_id, row["id"], row["node_id"], row["data"],
+                               pv, cache, m, vocab, closure)
                 await conn.commit()
                 m["recognitions_built"] += 1
             except Exception as e:  # noqa: BLE001 — isolate one bad record, keep going
@@ -249,6 +268,23 @@ async def canonicalize(run_id: uuid.UUID, *, fresh: bool = True) -> dict:
                       f"{m['recognitions_built']} built, "
                       f"{m['organization:created']} orgs, "
                       f"{m['organization:candidates']} candidates")
+
+        # Emit organization_alias rows for every retired (loser) key so that
+        # external consumers' stable keys redirect after a merge. Must happen
+        # after all org rows exist so winner IDs are available.
+        for loser_key, canonical_key in closure.items():
+            cur = await conn.execute(
+                "select id from organizations where norm_key = %s", (canonical_key,)
+            )
+            if winner_row := await cur.fetchone():
+                await ops.upsert_alias(conn, loser_key, winner_row["id"], "merge_decision")
+                m["aliases_written"] += 1
+            else:
+                m["aliases_orphaned"] += 1
+                print(f"[canonicalize] orphaned merge winner: {canonical_key!r} "
+                      f"(loser: {loser_key!r}) — normalization drift?")
+        if closure:
+            await conn.commit()
 
         await conn.execute("select refresh_derived()")
         await conn.commit()

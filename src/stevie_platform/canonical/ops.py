@@ -16,12 +16,14 @@ _SIMPLE = {"countries", "industries", "programs", "category_definitions"}
 
 
 async def truncate_canonical(conn) -> None:
-    """Canonical is a pure projection of parsed_records — safe to rebuild."""
+    """Canonical is a pure projection of parsed_records — safe to rebuild.
+    organization_alias is derived and included.
+    organization_merge_decision is a durable INPUT — excluded."""
     await conn.execute(
         "truncate recognitions, recognition_parties, parties, organizations, "
         "people, programs, program_editions, category_definitions, "
         "category_groups, categories, countries, industries, entity_links, "
-        "entity_candidates restart identity cascade"
+        "entity_candidates, organization_alias restart identity cascade"
     )
 
 
@@ -112,6 +114,16 @@ async def get_or_create_org(conn, norm_key: str, name: str, *,
         (norm_key, slug, name, raw_name, legal_suffix),
     )
     return (await cur.fetchone())["id"], True
+
+
+async def upsert_alias(conn, alias_norm_key: str, organization_id: int, via: str) -> None:
+    """Record a retired norm_key -> surviving org mapping in organization_alias."""
+    await conn.execute(
+        "insert into organization_alias (alias_norm_key, organization_id, via) "
+        "values (%s, %s, %s) on conflict (alias_norm_key) do update "
+        "set organization_id = excluded.organization_id, via = excluded.via",
+        (alias_norm_key, organization_id, via),
+    )
 
 
 async def party_for_org(conn, org_id: int) -> int:
