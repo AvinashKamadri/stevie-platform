@@ -14,3 +14,9 @@ proxies.txt
 # separately). The MANIFEST.md + SHA256SUMS beside them ARE tracked.
 snapshots/**/*.dump
 snapshots/**/dump.err
+
+# Trained model artifacts (joblib pickles): regenerable by re-running training
+# against a fixed model_version + split_version + feature_version (deterministic
+# solver, fixed random_state). model_registry (migration 012) is the durable
+# record; the pickle itself is a build product, not source.
+artifacts/

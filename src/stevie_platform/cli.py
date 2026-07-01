@@ -106,6 +106,9 @@ async def _main(argv: list[str]) -> int:
     cn.add_argument("--no-persist", action="store_true", help="generate + report only, don't write the table")
     ft = sub.add_parser("features")
     ft.add_argument("--no-persist", action="store_true", help="compute + report only, don't write the table")
+    tr = sub.add_parser("train")
+    tr.add_argument("--model-version", default=None, help="model version tag (default: scorer.MODEL_VERSION)")
+    tr.add_argument("--no-persist", action="store_true", help="train + report only, don't write registry/artifact/predictions")
     rc = sub.add_parser("recall")
     rc.add_argument("--corpus", default=None, help="gold corpus version (e.g. v1, v2; default from CORPUS.json)")
     sub.add_parser("report")
@@ -178,6 +181,10 @@ async def _main(argv: list[str]) -> int:
         elif args.cmd == "features":
             from stevie_platform.canonical.features import run_features
             await run_features(persist_rows=not args.no_persist)
+        elif args.cmd == "train":
+            from stevie_platform.canonical.scorer import MODEL_VERSION, run_train
+            await run_train(model_version=args.model_version or MODEL_VERSION,
+                             persist_rows=not args.no_persist)
         elif args.cmd == "recall":
             from stevie_platform.canonical.recall import run_recall
             await run_recall(corpus=args.corpus)

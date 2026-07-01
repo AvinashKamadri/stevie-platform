@@ -45,12 +45,3 @@ comment on table model_predictions is
 comment on column model_predictions.feature_snapshot is
     'The exact feature vector used for this prediction, frozen at prediction '
     'time — answers "why did this model think X?" even after feature_version advances.';
-
--- score/model_version on organization_merge_candidate (migration 010) were
--- placeholders ("ranker/probability; calibration TBD"), always null — no scorer
--- existed yet. Superseded by model_predictions, which supports multiple model
--- versions per candidate; a single mutable column on the candidate row could
--- not. Drop them so there is exactly one place a model result is written.
-drop index if exists omc_score_idx;
-alter table organization_merge_candidate drop column if exists score;
-alter table organization_merge_candidate drop column if exists model_version;

@@ -35,13 +35,14 @@ create table if not exists organization_merge_candidate (
     -- (a pair found by trigram AND rare-token carries both), so we can compute
     -- each blocker's MARGINAL recall and retire dead-weight blockers.
     reasons         text[] not null default '{}',
-    -- Scoring (M4 scorer; null until scored). features is a NAMED dict so a row
-    -- predating a feature is representable (missing key) vs feature=0. Tie it to
-    -- feature_version — the day a feature is added, old rows are honestly stale.
+    -- Scoring (M5 scorer). features is a NAMED dict so a row predating a
+    -- feature is representable (missing key) vs feature=0. Tie it to
+    -- feature_version — the day a feature is added, old rows are honestly
+    -- stale. Model OUTPUTS (probability, predicted_label) live in
+    -- model_predictions (migration 011), not here — a single mutable column
+    -- can't hold multiple model versions' predictions for the same candidate.
     features        jsonb,
     feature_version text,
-    score           numeric,                 -- ranker/probability; calibration TBD
-    model_version   text,
     status          text   not null default 'pending'
                     check (status in ('pending','scored','queued','decided','suppressed')),
     generated_at    timestamptz not null default now(),
@@ -51,7 +52,6 @@ create table if not exists organization_merge_candidate (
 create index if not exists omc_left_org_idx  on organization_merge_candidate (left_org_id);
 create index if not exists omc_right_org_idx on organization_merge_candidate (right_org_id);
 create index if not exists omc_status_idx    on organization_merge_candidate (status);
-create index if not exists omc_score_idx      on organization_merge_candidate (score desc);
 
 comment on table organization_merge_candidate is
     'Derived high-recall merge proposals (blocking output). Safe to truncate; '
