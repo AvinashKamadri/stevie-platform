@@ -116,6 +116,13 @@ async def _main(argv: list[str]) -> int:
     ev = sub.add_parser("evaluate")
     ev.add_argument("--model-version", default=None, help="model version tag (default: v1)")
     ev.add_argument("--corpus", default="v2", help="gold corpus version to evaluate against (default: v2)")
+    sc = sub.add_parser("score")
+    sc.add_argument("--model-version", default="v1.1", help="model version to score with (default: v1.1)")
+    sc.add_argument("--rescore", action="store_true", help="recompute for every candidate, not just unscored ones")
+    rv = sub.add_parser("review")
+    rv.add_argument("--lane", default="main", choices=["main", "acronym"], help="review queue lane (default: main)")
+    rv.add_argument("--model-version", default="v1.1", help="model version whose predictions to review (default: v1.1)")
+    rv.add_argument("--limit", type=int, default=50, help="max pairs to load into the session (default: 50)")
     rc = sub.add_parser("recall")
     rc.add_argument("--corpus", default=None, help="gold corpus version (e.g. v1, v2; default from CORPUS.json)")
     sub.add_parser("report")
@@ -201,6 +208,12 @@ async def _main(argv: list[str]) -> int:
             from stevie_platform.canonical.scorer_eval import MODEL_VERSION_DEFAULT, run_evaluate
             await run_evaluate(model_version=args.model_version or MODEL_VERSION_DEFAULT,
                                 corpus=args.corpus)
+        elif args.cmd == "score":
+            from stevie_platform.canonical.predict import run_score
+            await run_score(model_version=args.model_version, rescore=args.rescore)
+        elif args.cmd == "review":
+            from stevie_platform.canonical.review import run_review
+            await run_review(lane=args.lane, model_version=args.model_version, limit=args.limit)
         elif args.cmd == "recall":
             from stevie_platform.canonical.recall import run_recall
             await run_recall(corpus=args.corpus)
