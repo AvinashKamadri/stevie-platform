@@ -247,13 +247,18 @@ async def generate(conn) -> tuple[list[Pair], list[BlockerStat]]:
 
 
 async def persist(conn, pairs: list[Pair]) -> int:
-    """Full recompute: truncate the derived table and bulk-insert. Truncating is
-    safe — this table is regenerable (see migration 010). CASCADE is required
-    because model_predictions (migration 011) FKs to this table's id, which is
-    NOT stable across regeneration (restart identity); a prediction is only
-    meaningful against the generation that produced its candidate row, so
-    regenerating candidates correctly invalidates stale predictions too."""
-    await conn.execute("truncate organization_merge_candidate restart identity cascade")
+    """Full recompute: clear the derived table and bulk-insert. DELETE, not
+    TRUNCATE: model_predictions (migration 011/014) FKs to this table's id via
+    ON DELETE SET NULL — predictions are keyed by (left_key, right_key,
+    model_version), the rebuild-stable identity, so they must SURVIVE candidate
+    regeneration (only their now-stale candidate_id pointer goes null).
+    TRUNCATE can't express that: TRUNCATE ... CASCADE always wipes referencing
+    tables wholesale regardless of the FK's ON DELETE clause, and plain
+    TRUNCATE refuses outright while any FK references this table. DELETE
+    honors ON DELETE SET NULL correctly. Ids no longer restart at 1 after a
+    regeneration (an accepted tradeoff — ids were always per-generation
+    convenience FKs, never assumed contiguous)."""
+    await conn.execute("delete from organization_merge_candidate")
     if not pairs:
         return 0
     async with conn.cursor() as cur:

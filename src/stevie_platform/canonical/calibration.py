@@ -144,11 +144,9 @@ async def run_calibrate(*, model_version: str = MODEL_VERSION_DEFAULT, persist_r
 
         pred_rows = []
         for r, prob in list(zip(calib_rows, calib_calibrated)) + list(zip(eval_rows, eval_calibrated)):
-            if r["candidate_id"] is None:
-                continue
             pred_rows.append((
-                r["candidate_id"], model_version, r["feature_version"], round(prob, 6),
-                "merge" if prob >= 0.5 else "distinct", json.dumps(r["features"]),
+                r["candidate_id"], r["left_key"], r["right_key"], model_version, r["feature_version"],
+                round(prob, 6), "merge" if prob >= 0.5 else "distinct", json.dumps(r["features"]),
             ))
 
         if persist_rows:
@@ -156,10 +154,11 @@ async def run_calibrate(*, model_version: str = MODEL_VERSION_DEFAULT, persist_r
                 async with conn.cursor() as cur:
                     await cur.executemany(
                         """insert into model_predictions
-                             (candidate_id, model_version, feature_version, probability,
-                              predicted_label, feature_snapshot)
-                           values (%s,%s,%s,%s,%s,%s)
-                           on conflict (candidate_id, model_version) do update set
+                             (candidate_id, left_key, right_key, model_version, feature_version,
+                              probability, predicted_label, feature_snapshot)
+                           values (%s,%s,%s,%s,%s,%s,%s,%s)
+                           on conflict (left_key, right_key, model_version) do update set
+                             candidate_id = excluded.candidate_id,
                              probability = excluded.probability,
                              predicted_label = excluded.predicted_label,
                              feature_snapshot = excluded.feature_snapshot,

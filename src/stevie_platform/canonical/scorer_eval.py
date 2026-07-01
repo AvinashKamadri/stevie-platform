@@ -121,9 +121,11 @@ async def run_evaluate(*, model_version: str = MODEL_VERSION_DEFAULT, corpus: st
         already_frozen = reg_row["metrics_summary"] is not None
 
         cur = await conn.execute(
-            """select omc.left_key, omc.right_key, omc.reasons, mp.probability, mp.predicted_label
+            """select mp.left_key, mp.right_key, coalesce(omc.reasons, '{}') reasons,
+                      mp.probability, mp.predicted_label
                  from model_predictions mp
-                 join organization_merge_candidate omc on omc.id = mp.candidate_id
+                 left join organization_merge_candidate omc
+                   on omc.left_key = mp.left_key and omc.right_key = mp.right_key
                 where mp.model_version = %s""",
             (model_version,),
         )

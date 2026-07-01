@@ -169,7 +169,7 @@ async def load_labeled_dataset(conn, *, corpus: str = "v2"):
             feats, fver, cand_id = extract_features(ka, kb, (), rare_tokens=rare_tokens), FEATURE_VERSION, None
             fallback_n += 1
         rows.append({
-            "key_a": ka, "key_b": kb, "label": g["label"],
+            "key_a": ka, "key_b": kb, "left_key": lk, "right_key": rk, "label": g["label"],
             "features": feats, "feature_version": fver, "candidate_id": cand_id,
             "partition": assign_split(ka, kb),
         })
@@ -240,11 +240,9 @@ async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = 
 
         pred_rows = []
         for r, prob in list(zip(calib_rows, calib_proba)) + list(zip(eval_rows, eval_proba)):
-            if r["candidate_id"] is None:
-                continue
             pred_rows.append((
-                r["candidate_id"], model_version, r["feature_version"], round(prob, 6),
-                "merge" if prob >= 0.5 else "distinct", json.dumps(r["features"]),
+                r["candidate_id"], r["left_key"], r["right_key"], model_version, r["feature_version"],
+                round(prob, 6), "merge" if prob >= 0.5 else "distinct", json.dumps(r["features"]),
             ))
 
         artifact_dir = BASE_DIR / "artifacts" / "models"
@@ -259,10 +257,11 @@ async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = 
                 async with conn.cursor() as cur:
                     await cur.executemany(
                         """insert into model_predictions
-                             (candidate_id, model_version, feature_version, probability,
-                              predicted_label, feature_snapshot)
-                           values (%s,%s,%s,%s,%s,%s)
-                           on conflict (candidate_id, model_version) do update set
+                             (candidate_id, left_key, right_key, model_version, feature_version,
+                              probability, predicted_label, feature_snapshot)
+                           values (%s,%s,%s,%s,%s,%s,%s,%s)
+                           on conflict (left_key, right_key, model_version) do update set
+                             candidate_id = excluded.candidate_id,
                              probability = excluded.probability,
                              predicted_label = excluded.predicted_label,
                              feature_snapshot = excluded.feature_snapshot,
