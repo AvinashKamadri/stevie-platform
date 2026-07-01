@@ -81,8 +81,21 @@ tests/test_parse.py            parser fixtures
 
 ## Not in Phase 1
 
-No entity resolution, no search, no embeddings, no RAG, no assistant, no
-CloudCannon. Those are states 3–4 and the consumer products, built later on the
-intelligence layer as a **library first**, a service only when the assistant
-needs it.
+No search, no embeddings, no RAG, no assistant, no CloudCannon. Those are
+consumer products, built later on the intelligence layer as a **library
+first**, a service only when the assistant needs it.
+
+## Entity resolution (organizations) — v1.0
+
+State 3 (canonical) now includes a full organization entity-resolution
+subsystem: deterministic canonicalization, high-recall blocking, a calibrated
+scorer, frozen evaluation, and a human review workflow feeding durable merge
+decisions back into replay. See
+[`experiments/entity_resolution/ORG_RESOLUTION_v1.0.md`](experiments/entity_resolution/ORG_RESOLUTION_v1.0.md)
+for the architecture, evaluation results, and how to operate it.
+
+Person/award/role extraction (a separate `Recognition -> Organization | Person
+| Award | Role` project) and the relationship graph (structuring `related`
+verdicts into parent/subsidiary/foundation edges) are explicitly NOT part of
+this — later, independent phases.
 ```
