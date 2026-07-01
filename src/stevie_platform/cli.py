@@ -104,6 +104,8 @@ async def _main(argv: list[str]) -> int:
     cz.add_argument("--keep", action="store_true", help="don't truncate canonical first")
     cn = sub.add_parser("candidates")
     cn.add_argument("--no-persist", action="store_true", help="generate + report only, don't write the table")
+    ft = sub.add_parser("features")
+    ft.add_argument("--no-persist", action="store_true", help="compute + report only, don't write the table")
     rc = sub.add_parser("recall")
     rc.add_argument("--corpus", default=None, help="gold corpus version (e.g. v1, v2; default from CORPUS.json)")
     sub.add_parser("report")
@@ -173,6 +175,9 @@ async def _main(argv: list[str]) -> int:
         elif args.cmd == "candidates":
             from stevie_platform.canonical.candidates import run_candidates
             await run_candidates(persist_rows=not args.no_persist)
+        elif args.cmd == "features":
+            from stevie_platform.canonical.features import run_features
+            await run_features(persist_rows=not args.no_persist)
         elif args.cmd == "recall":
             from stevie_platform.canonical.recall import run_recall
             await run_recall(corpus=args.corpus)

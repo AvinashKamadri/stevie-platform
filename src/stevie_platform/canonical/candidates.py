@@ -142,6 +142,23 @@ def acronym_pairs(orgs: list[tuple[str, int]]) -> list[RawPair]:
     return out
 
 
+def is_acronym_expansion(key_a: str, key_b: str) -> bool:
+    """True if either key is a single alpha token spelling out the other's
+    initials (plain or stopword-skipping variant). Order-independent — unlike
+    `acronym_pairs` (which indexes many orgs at once for the blocker), this is
+    the single-pair check used as a scorer feature, sharing the same `_initials`
+    rule so a feature and the blocker that surfaced the pair never disagree on
+    what "acronym" means."""
+    def _acronym_of(short_key: str, long_key: str) -> bool:
+        if not (short_key.isalpha() and _ACRONYM_MIN <= len(short_key) <= _ACRONYM_MAX):
+            return False
+        toks = long_key.split()
+        if len(toks) < 2:
+            return False
+        return short_key in {_initials(toks, skip_stop=False), _initials(toks, skip_stop=True)}
+    return _acronym_of(key_a, key_b) or _acronym_of(key_b, key_a)
+
+
 # --- blockers ---------------------------------------------------------------
 # Each returns RawPairs tagged with its reason. They are deliberately cheap and
 # over-generous; the union is deduped by merge_pairs.
@@ -231,8 +248,12 @@ async def generate(conn) -> tuple[list[Pair], list[BlockerStat]]:
 
 async def persist(conn, pairs: list[Pair]) -> int:
     """Full recompute: truncate the derived table and bulk-insert. Truncating is
-    safe — this table is regenerable (see migration 010)."""
-    await conn.execute("truncate organization_merge_candidate restart identity")
+    safe — this table is regenerable (see migration 010). CASCADE is required
+    because model_predictions (migration 011) FKs to this table's id, which is
+    NOT stable across regeneration (restart identity); a prediction is only
+    meaningful against the generation that produced its candidate row, so
+    regenerating candidates correctly invalidates stale predictions too."""
+    await conn.execute("truncate organization_merge_candidate restart identity cascade")
     if not pairs:
         return 0
     async with conn.cursor() as cur:
