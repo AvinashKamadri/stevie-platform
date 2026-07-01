@@ -109,6 +109,7 @@ async def _main(argv: list[str]) -> int:
     tr = sub.add_parser("train")
     tr.add_argument("--model-version", default=None, help="model version tag (default: scorer.MODEL_VERSION)")
     tr.add_argument("--no-persist", action="store_true", help="train + report only, don't write registry/artifact/predictions")
+    tr.add_argument("--class-weight", default=None, help="sklearn class_weight, e.g. 'balanced' (default: None)")
     ca = sub.add_parser("calibrate")
     ca.add_argument("--model-version", default=None, help="model version tag (default: v1)")
     ca.add_argument("--no-persist", action="store_true", help="calibrate + report only, don't supersede stored predictions")
@@ -190,7 +191,8 @@ async def _main(argv: list[str]) -> int:
         elif args.cmd == "train":
             from stevie_platform.canonical.scorer import MODEL_VERSION, run_train
             await run_train(model_version=args.model_version or MODEL_VERSION,
-                             persist_rows=not args.no_persist)
+                             persist_rows=not args.no_persist,
+                             class_weight=args.class_weight)
         elif args.cmd == "calibrate":
             from stevie_platform.canonical.calibration import MODEL_VERSION_DEFAULT, run_calibrate
             await run_calibrate(model_version=args.model_version or MODEL_VERSION_DEFAULT,

@@ -1,10 +1,13 @@
 """
 Merge/no-merge scorer (M5.3) — a boringly correct logistic-regression baseline.
 
-Scope is locked to answering ONE question: can the 11 engineered features
+Scope is locked to answering ONE question: can the engineered features
 (canonical/features.py) produce a useful merge probability? Not: the best
 model. Hyperparameter tuning, feature selection, and fancier algorithms are
-explicitly out of scope until this baseline exists to measure them against.
+explicitly out of scope until a baseline exists to measure them against. v1.1
+adds one normalization feature (despaced_trigram_similarity, feature_version
+v2) in response to the v1 frozen evaluation's false-negative list — same
+algorithm, same design otherwise; see features.py's module docstring.
 
 Pipeline (this module owns the train step; split.py partitions, calibration.py
 Platt-scales, scorer_eval.py runs the one frozen evaluation):
@@ -57,7 +60,9 @@ BINARY_FEATURES = (
 SCALE_FEATURES = (
     "trigram_similarity", "token_jaccard", "length_ratio",
     "shared_rare_token_count", "normalized_token_overlap",
+    "despaced_trigram_similarity",
     "prefix_overlap", "suffix_match",
+    "acronym_x_trigram", "acronym_x_jaccard",
 )
 
 # Fixed design-matrix column order: scaled columns first, then binary columns.
@@ -77,13 +82,20 @@ def to_row(features: dict) -> list[float]:
     return [float(features[name]) for name in FEATURE_ORDER]
 
 
-def fit_model(x_train_raw, y_train, *, random_state: int = 0):
+def fit_model(x_train_raw, y_train, *, random_state: int = 0, class_weight=None):
     """Fit a StandardScaler (on the scale-feature columns only) + a logistic
     regression on the transformed matrix. Deterministic: lbfgs (sklearn's
     default solver) has no internal randomness for this problem size;
     random_state is set anyway so a future solver change stays reproducible.
     Pure given x_train_raw/y_train — no DB, no file IO — so determinism is
-    directly unit-testable (same inputs -> bit-identical coefficients)."""
+    directly unit-testable (same inputs -> bit-identical coefficients).
+
+    class_weight: None (default, v1/v1.1/v1.2) fits every row equally, which
+    is exactly what lets ONE global coefficient on a majority-population
+    feature dominate a minority subgroup's classification (see the v1.1
+    acronym decomposition in features.py's module docstring). 'balanced'
+    reweights the loss by inverse class frequency — a pre-authorized fallback
+    if interaction features alone don't move acronym recall."""
     import numpy as np
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
@@ -91,7 +103,7 @@ def fit_model(x_train_raw, y_train, *, random_state: int = 0):
     x_train_raw = np.asarray(x_train_raw, dtype=float)
     scaler = StandardScaler().fit(x_train_raw[:, :N_SCALE])
     x_train = transform(x_train_raw, scaler)
-    clf = LogisticRegression(max_iter=1000, random_state=random_state)
+    clf = LogisticRegression(max_iter=1000, random_state=random_state, class_weight=class_weight)
     clf.fit(x_train, y_train)
     return scaler, clf
 
@@ -174,7 +186,8 @@ def _class_counts(rows: list[dict]) -> dict:
     return out
 
 
-async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = True) -> dict:
+async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = True,
+                     class_weight=None) -> dict:
     """CLI entry: train on `train`, score (not evaluate) `calibration` +
     `evaluation`, persist the artifact + registry row + predictions."""
     import numpy as np
@@ -212,7 +225,7 @@ async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = 
 
         x_train_raw = np.array([to_row(r["features"]) for r in train_rows])
         y_train = [1 if r["label"] == "merge" else 0 for r in train_rows]
-        scaler, clf = fit_model(x_train_raw, y_train)
+        scaler, clf = fit_model(x_train_raw, y_train, class_weight=class_weight)
         coeffs = coefficient_table(clf)
 
         def score(rows_: list[dict]):
@@ -271,7 +284,8 @@ async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = 
                      artifact_path = excluded.artifact_path,
                      coefficients = excluded.coefficients,
                      training_timestamp = now()""",
-                (model_version, FEATURE_VERSION, SPLIT_VERSION, ALGORITHM,
+                (model_version, FEATURE_VERSION, SPLIT_VERSION,
+                 f"{ALGORITHM}(class_weight={class_weight!r})" if class_weight else ALGORITHM,
                  len(train_rows), json.dumps(class_counts), str(artifact_path),
                  json.dumps(coeffs)),
             )
@@ -279,7 +293,8 @@ async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = 
 
     summary = {
         "model_version": model_version, "feature_version": FEATURE_VERSION,
-        "split_version": SPLIT_VERSION, "algorithm": ALGORITHM,
+        "split_version": SPLIT_VERSION,
+        "algorithm": f"{ALGORITHM}(class_weight={class_weight!r})" if class_weight else ALGORITHM,
         "train_n": len(train_rows), "calibration_n": len(calib_rows), "evaluation_n": len(eval_rows),
         "fallback_n": fallback_n, "class_counts": class_counts,
         "predictions_written": len(pred_rows) if persist_rows else 0,

@@ -1,15 +1,38 @@
 """
-Scorer feature extraction (M5.2) — turns a candidate pair into a fixed, named
-feature vector for the merge/no-merge classifier.
+Scorer feature extraction — turns a candidate pair into a fixed, named feature
+vector for the merge/no-merge classifier.
 
-Scope is DELIBERATELY narrow (feature_version "v1", 11 features): provenance +
-lexical + structural signal only. Context features (shared country/industry,
-recognition counts) are excluded on purpose — those are the same signals used to
-ORDER the labeling queue (review_priority in mine_hard_cases.py), and letting
-them into the model blurs "the model learned this" with "the reviewer queue
-already told it this", per the M4 discipline of keeping review heuristics out of
-model features. They can return deliberately, as a versioned v2, once the v1
-baseline exists to compare against.
+Scope is DELIBERATELY narrow: provenance + lexical + structural signal only.
+Context features (shared country/industry, recognition counts) are excluded on
+purpose — those are the same signals used to ORDER the labeling queue
+(review_priority in mine_hard_cases.py), and letting them into the model blurs
+"the model learned this" with "the reviewer queue already told it this", per
+the M4 discipline of keeping review heuristics out of model features.
+
+feature_version v2 (v1.1 iteration): the v1 frozen evaluation's false-negative
+list surfaced normalization gaps that were costing genuinely easy merges, not
+just the known acronym gap — 'the X' prefix variants ('korea transportation
+safety authority' vs 'the korea transportation safety authority') and
+concatenated-vs-spaced variants ('rhino runner' vs 'rhinorunner', which share
+ZERO whitespace tokens despite being the same name). v2 adds a normalization
+pass (normalize_for_features) applied uniformly before every lexical/
+structural feature, plus one new feature (despaced_trigram_similarity) that
+targets the concatenation case directly. Fixed the 3 'the X' false negatives;
+acronym recall stayed exactly 0.000 (v1.1 frozen evaluation), as expected —
+normalization does not touch the acronym problem.
+
+feature_version v3 (v1.2 iteration): decomposing v1.1's linear score for a real
+acronym false negative (ca/cessna aircraft) showed the acronym indicator's
+coefficient is NOT the problem — length_ratio's negative coefficient actually
+HELPS acronym pairs (their tiny length_ratio flips it positive). The pair is
+sunk by despaced_trigram_similarity and token_jaccard: ONE global coefficient
+fits the dominant near-duplicate population (where high similarity strongly
+predicts merge), and acronym pairs sit at that same feature's near-zero
+extreme, so standardization turns "near zero" into a large negative z-score
+times a sizeable positive coefficient. acronym_x_trigram/acronym_x_jaccard
+interaction terms let the model give the acronym subgroup its own
+(potentially near-zero or negative) slope on these two features instead of
+inheriting the majority population's.
 
 Features are computed once and stored on organization_merge_candidate.features
 (named jsonb dict, so a row predating a feature is representable as a missing
@@ -19,10 +42,11 @@ model_predictions (migration 011) — this module never writes a prediction.
 from __future__ import annotations
 
 import json
+import re
 
 from stevie_platform.canonical.candidates import content_tokens, is_acronym_expansion
 
-FEATURE_VERSION = "v1"
+FEATURE_VERSION = "v3"
 
 FEATURE_NAMES = (
     # provenance — which blocker(s) surfaced this pair
@@ -30,9 +54,35 @@ FEATURE_NAMES = (
     # lexical
     "trigram_similarity", "token_jaccard", "length_ratio",
     "shared_rare_token_count", "normalized_token_overlap",
+    "despaced_trigram_similarity",
     # structural
     "is_acronym_expansion", "prefix_overlap", "suffix_match",
+    # interaction (v3) — let the acronym subgroup have its own slope on the two
+    # features that sink it in v1/v1.1 (see module docstring)
+    "acronym_x_trigram", "acronym_x_jaccard",
 )
+
+# Articles stripped as whole tokens (not a general stopword list — norm_key
+# already handles legal-suffix/location stripping upstream; this is narrowly
+# the "the X" vs "X" false-negative pattern from the v1 evaluation).
+_ARTICLES = {"a", "an", "the"}
+# Anything that isn't a word character or whitespace: apostrophes, hyphens,
+# periods, commas. '&' is handled separately (spelled out) before this strips
+# it, so 'AT&T' and 'AT and T' converge instead of both losing the symbol.
+_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def normalize_for_features(key: str) -> str:
+    """Preprocessing applied before every lexical/structural feature (v2).
+    Punctuation equivalence ('&' <-> 'and', apostrophes/hyphens stripped),
+    article stripping ('the'/'a'/'an' as whole tokens), whitespace collapse.
+    Does NOT touch organizations.norm_key — this is scorer-local
+    preprocessing, so it can iterate without a full canonical rebuild.
+    Idempotent (normalizing twice is a no-op)."""
+    s = key.replace("&", " and ")
+    s = _PUNCT_RE.sub(" ", s)
+    tokens = [t for t in s.split() if t not in _ARTICLES]
+    return " ".join(tokens)
 
 
 # --- lexical -----------------------------------------------------------------
@@ -91,6 +141,15 @@ def normalized_token_overlap(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
+def despaced_trigram_similarity(a: str, b: str) -> float:
+    """trigram_similarity with ALL whitespace removed. token_jaccard and
+    normalized_token_overlap both go to 0 for a concatenated-vs-spaced variant
+    ('rhinorunner' has no token to overlap with {'rhino','runner'}) — this
+    reuses the same trigram measure on despaced input to catch exactly that
+    case (v1 false negative: 'rhino runner'/'rhinorunner' scored 0.004)."""
+    return trigram_similarity(a.replace(" ", ""), b.replace(" ", ""))
+
+
 # --- structural ----------------------------------------------------------
 
 def prefix_overlap(a: str, b: str) -> float:
@@ -124,20 +183,40 @@ def suffix_match(a: str, b: str) -> float:
 def extract_features(key_a: str, key_b: str, reasons: tuple[str, ...], *,
                       rare_tokens: frozenset[str] = frozenset()) -> dict:
     """Pure: build the full named feature vector for one candidate pair. Order
-    of key_a/key_b does not matter for any feature here (all are symmetric)."""
+    of key_a/key_b does not matter for any feature here (all are symmetric).
+
+    Every lexical/structural feature is computed on the NORMALIZED keys
+    (normalize_for_features) — v2's whole point. blocked_by_* provenance stays
+    tied to the ORIGINAL keys' reasons (blocking already happened upstream on
+    organizations.norm_key; normalization here doesn't change what was
+    surfaced, only how the scorer reads it).
+
+    acronym_x_trigram/acronym_x_jaccard (v3) are is_acronym_expansion GATED
+    copies of trigram_similarity/token_jaccard — 0 for every non-acronym pair,
+    equal to the raw similarity for an acronym pair. They let the model learn
+    a slope on these two features that applies ONLY within the acronym
+    subgroup, instead of one global slope fit to the (much larger)
+    non-acronym population and then applied to acronym pairs regardless."""
+    na, nb = normalize_for_features(key_a), normalize_for_features(key_b)
+    is_acronym = is_acronym_expansion(na, nb)
+    trigram_sim = trigram_similarity(na, nb)
+    jaccard = token_jaccard(na, nb)
     reasons_set = set(reasons)
     return {
         "blocked_by_trigram": "trigram" in reasons_set,
         "blocked_by_rare_token": "rare_token" in reasons_set,
         "blocked_by_acronym": "acronym" in reasons_set,
-        "trigram_similarity": round(trigram_similarity(key_a, key_b), 6),
-        "token_jaccard": round(token_jaccard(key_a, key_b), 6),
-        "length_ratio": round(length_ratio(key_a, key_b), 6),
-        "shared_rare_token_count": shared_rare_token_count(key_a, key_b, rare_tokens),
-        "normalized_token_overlap": round(normalized_token_overlap(key_a, key_b), 6),
-        "is_acronym_expansion": is_acronym_expansion(key_a, key_b),
-        "prefix_overlap": round(prefix_overlap(key_a, key_b), 6),
-        "suffix_match": round(suffix_match(key_a, key_b), 6),
+        "trigram_similarity": round(trigram_sim, 6),
+        "token_jaccard": round(jaccard, 6),
+        "length_ratio": round(length_ratio(na, nb), 6),
+        "shared_rare_token_count": shared_rare_token_count(na, nb, rare_tokens),
+        "normalized_token_overlap": round(normalized_token_overlap(na, nb), 6),
+        "despaced_trigram_similarity": round(despaced_trigram_similarity(na, nb), 6),
+        "is_acronym_expansion": is_acronym,
+        "prefix_overlap": round(prefix_overlap(na, nb), 6),
+        "suffix_match": round(suffix_match(na, nb), 6),
+        "acronym_x_trigram": round(trigram_sim, 6) if is_acronym else 0.0,
+        "acronym_x_jaccard": round(jaccard, 6) if is_acronym else 0.0,
     }
 
 
@@ -171,7 +250,10 @@ async def persist_features(conn, rows: list[tuple[int, dict]]) -> int:
 
 
 async def run_features(*, persist_rows: bool = True) -> dict:
-    """CLI entry: compute feature_version v1 features for every candidate row."""
+    """CLI entry: compute the current FEATURE_VERSION's features for every
+    candidate row. Safe to re-run after a feature_version bump — frozen model
+    versions keep their own feature_snapshot in model_predictions, independent
+    of whatever organization_merge_candidate.features currently holds."""
     from stevie_platform import db
     p = await db.pool()
     async with p.connection() as conn:

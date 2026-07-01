@@ -65,6 +65,20 @@ def test_fit_model_recovers_the_separating_signal():
     assert list(preds) == y  # trivially separable toy data -> perfect fit
 
 
+def test_fit_model_defaults_to_unweighted():
+    x, y = _toy_dataset()
+    _, clf = fit_model(x, y)
+    assert clf.class_weight is None
+
+
+def test_fit_model_class_weight_is_threaded_through_and_deterministic():
+    x, y = _toy_dataset()
+    _, clf_a = fit_model(x, y, class_weight="balanced")
+    _, clf_b = fit_model(x, y, class_weight="balanced")
+    assert clf_a.class_weight == "balanced"
+    assert np.array_equal(clf_a.coef_, clf_b.coef_)
+
+
 def test_transform_only_scales_the_scale_columns():
     x, y = _toy_dataset()
     scaler, _ = fit_model(x, y)

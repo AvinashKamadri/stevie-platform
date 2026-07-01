@@ -1,0 +1,11 @@
+{"key_a": "petrokimia gresik", "key_b": "pt petrokimia gresik", "label": "merge", "predicted_label": "distinct", "probability": 0.338787, "reasons": ["rare_token", "trigram"]}
+{"key_a": "gyeonggi tourism organization", "key_b": "gyeonngi tourism organization", "label": "merge", "predicted_label": "distinct", "probability": 0.051601, "reasons": ["trigram"]}
+{"key_a": "ayala land estates", "key_b": "ayalaland estates", "label": "merge", "predicted_label": "distinct", "probability": 0.164043, "reasons": ["trigram"]}
+{"key_a": "rhino runner", "key_b": "rhinorunner", "label": "merge", "predicted_label": "distinct", "probability": 0.143567, "reasons": ["trigram"]}
+{"key_a": "stratus communications", "key_b": "strauss communications", "label": "merge", "predicted_label": "distinct", "probability": 0.004851, "reasons": ["trigram"]}
+{"key_a": "dallas marketing communications", "key_b": "downing street communications", "label": "merge", "predicted_label": "distinct", "probability": 5.7e-05, "reasons": ["trigram"]}
+{"key_a": "kb", "key_b": "kookmin bank", "label": "merge", "predicted_label": "distinct", "probability": 0.056363, "reasons": ["acronym"]}
+{"key_a": "applied predictive technologies", "key_b": "apt", "label": "merge", "predicted_label": "distinct", "probability": 0.137967, "reasons": ["acronym"]}
+{"key_a": "ca", "key_b": "cessna aircraft", "label": "merge", "predicted_label": "distinct", "probability": 0.120825, "reasons": ["acronym"]}
+{"key_a": "colangelo partners", "key_b": "cp", "label": "merge", "predicted_label": "distinct", "probability": 0.198131, "reasons": ["acronym"]}
+{"key_a": "jennings social media and martech", "key_b": "jsmm", "label": "merge", "predicted_label": "distinct", "probability": 0.393899, "reasons": ["acronym"]}
