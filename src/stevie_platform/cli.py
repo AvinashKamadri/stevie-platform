@@ -102,6 +102,10 @@ async def _main(argv: list[str]) -> int:
     sub.add_parser("reparse")
     cz = sub.add_parser("canonicalize")
     cz.add_argument("--keep", action="store_true", help="don't truncate canonical first")
+    cn = sub.add_parser("candidates")
+    cn.add_argument("--no-persist", action="store_true", help="generate + report only, don't write the table")
+    rc = sub.add_parser("recall")
+    rc.add_argument("--corpus", default=None, help="gold corpus version (e.g. v1, v2; default from CORPUS.json)")
     sub.add_parser("report")
     sub.add_parser("metrics")
     sub.add_parser("gates")
@@ -166,6 +170,12 @@ async def _main(argv: list[str]) -> int:
                                               git_commit=_git_commit())
             summary = await canonicalize(run_id, fresh=not args.keep)
             await db.finish_crawl_run(run_id, summary)
+        elif args.cmd == "candidates":
+            from stevie_platform.canonical.candidates import run_candidates
+            await run_candidates(persist_rows=not args.no_persist)
+        elif args.cmd == "recall":
+            from stevie_platform.canonical.recall import run_recall
+            await run_recall(corpus=args.corpus)
         elif args.cmd == "report":
             from stevie_platform.canonical.report import print_report
             await print_report()

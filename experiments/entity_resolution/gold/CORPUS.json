@@ -1,0 +1,27 @@
+{
+  "default": "v1",
+  "versions": {
+    "v1": {
+      "description": "Frozen 500-pair benchmark.",
+      "components": [
+        {
+          "file": "pairs.jsonl",
+          "description": "Original stratified random sample from the trigram-discoverable space (m2_sample.sql). Measures recall WITHIN the space blocking already searches."
+        }
+      ]
+    },
+    "v2": {
+      "description": "v/by1 + mined hard cases that live OUTSIDE the discoverable space.",
+      "components": [
+        {
+          "file": "pairs.jsonl",
+          "description": "Original stratified random sample (see v1)."
+        },
+        {
+          "file": "supplement.jsonl",
+          "description": "Mined hard cases (acronym/expansion, abbreviation, reordered, &/and) from mine_hard_cases.py, hand-labeled via `label.py --corpus supplement export`. Adds out-of-distribution positives so blocking_gap can be non-zero, plus hard negatives and 'related' pairs for the scorer."
+        }
+      ]
+    }
+  }
+}
