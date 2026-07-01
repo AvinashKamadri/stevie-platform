@@ -109,6 +109,12 @@ async def _main(argv: list[str]) -> int:
     tr = sub.add_parser("train")
     tr.add_argument("--model-version", default=None, help="model version tag (default: scorer.MODEL_VERSION)")
     tr.add_argument("--no-persist", action="store_true", help="train + report only, don't write registry/artifact/predictions")
+    ca = sub.add_parser("calibrate")
+    ca.add_argument("--model-version", default=None, help="model version tag (default: v1)")
+    ca.add_argument("--no-persist", action="store_true", help="calibrate + report only, don't supersede stored predictions")
+    ev = sub.add_parser("evaluate")
+    ev.add_argument("--model-version", default=None, help="model version tag (default: v1)")
+    ev.add_argument("--corpus", default="v2", help="gold corpus version to evaluate against (default: v2)")
     rc = sub.add_parser("recall")
     rc.add_argument("--corpus", default=None, help="gold corpus version (e.g. v1, v2; default from CORPUS.json)")
     sub.add_parser("report")
@@ -185,6 +191,14 @@ async def _main(argv: list[str]) -> int:
             from stevie_platform.canonical.scorer import MODEL_VERSION, run_train
             await run_train(model_version=args.model_version or MODEL_VERSION,
                              persist_rows=not args.no_persist)
+        elif args.cmd == "calibrate":
+            from stevie_platform.canonical.calibration import MODEL_VERSION_DEFAULT, run_calibrate
+            await run_calibrate(model_version=args.model_version or MODEL_VERSION_DEFAULT,
+                                 persist_rows=not args.no_persist)
+        elif args.cmd == "evaluate":
+            from stevie_platform.canonical.scorer_eval import MODEL_VERSION_DEFAULT, run_evaluate
+            await run_evaluate(model_version=args.model_version or MODEL_VERSION_DEFAULT,
+                                corpus=args.corpus)
         elif args.cmd == "recall":
             from stevie_platform.canonical.recall import run_recall
             await run_recall(corpus=args.corpus)

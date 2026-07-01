@@ -1,0 +1,14 @@
+{"key_a": "korea transportation safety authority", "key_b": "the korea transportation safety authority", "label": "merge", "predicted_label": "distinct", "probability": 0.256187, "reasons": ["trigram"]}
+{"key_a": "petrokimia gresik", "key_b": "pt petrokimia gresik", "label": "merge", "predicted_label": "distinct", "probability": 0.368273, "reasons": ["rare_token", "trigram"]}
+{"key_a": "general administration of customs", "key_b": "the general administration of customs", "label": "merge", "predicted_label": "distinct", "probability": 0.259254, "reasons": ["trigram"]}
+{"key_a": "pr training academy", "key_b": "the pr training academy", "label": "merge", "predicted_label": "distinct", "probability": 0.162892, "reasons": ["trigram"]}
+{"key_a": "gyeonggi tourism organization", "key_b": "gyeonngi tourism organization", "label": "merge", "predicted_label": "distinct", "probability": 0.041244, "reasons": ["trigram"]}
+{"key_a": "ayala land estates", "key_b": "ayalaland estates", "label": "merge", "predicted_label": "distinct", "probability": 0.016656, "reasons": ["trigram"]}
+{"key_a": "rhino runner", "key_b": "rhinorunner", "label": "merge", "predicted_label": "distinct", "probability": 0.004477, "reasons": ["trigram"]}
+{"key_a": "stratus communications", "key_b": "strauss communications", "label": "merge", "predicted_label": "distinct", "probability": 0.004464, "reasons": ["trigram"]}
+{"key_a": "dallas marketing communications", "key_b": "downing street communications", "label": "merge", "predicted_label": "distinct", "probability": 9.1e-05, "reasons": ["trigram"]}
+{"key_a": "kb", "key_b": "kookmin bank", "label": "merge", "predicted_label": "distinct", "probability": 0.136668, "reasons": ["acronym"]}
+{"key_a": "applied predictive technologies", "key_b": "apt", "label": "merge", "predicted_label": "distinct", "probability": 0.174192, "reasons": ["acronym"]}
+{"key_a": "ca", "key_b": "cessna aircraft", "label": "merge", "predicted_label": "distinct", "probability": 0.138134, "reasons": ["acronym"]}
+{"key_a": "colangelo partners", "key_b": "cp", "label": "merge", "predicted_label": "distinct", "probability": 0.138552, "reasons": ["acronym"]}
+{"key_a": "jennings social media and martech", "key_b": "jsmm", "label": "merge", "predicted_label": "distinct", "probability": 0.092564, "reasons": ["acronym"]}

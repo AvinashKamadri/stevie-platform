@@ -6,11 +6,16 @@ Scope is locked to answering ONE question: can the 11 engineered features
 model. Hyperparameter tuning, feature selection, and fancier algorithms are
 explicitly out of scope until this baseline exists to measure them against.
 
-Pipeline (this module owns steps 2-5; canonical/split.py owns step 1):
+Pipeline (this module owns the train step; split.py partitions, calibration.py
+Platt-scales, scorer_eval.py runs the one frozen evaluation):
     labeled gold pair -> split.assign_split -> {train, calibration, evaluation}
-    train                -> fit scaler + logistic regression
-    calibration/evaluation -> scored with the fitted model (NOT evaluated yet —
-                               that is M5.5's single frozen run on `evaluation`)
+    train                -> fit scaler + logistic regression (this module)
+    calibration/evaluation -> scored with the fitted model and persisted as a
+                               provisional (raw) probability, immediately
+                               superseded by calibration.run_calibrate's
+                               Platt-scaled value — see model_predictions'
+                               mutability note (migration 011). NOT evaluated
+                               yet either way; that is M5.5's single frozen run.
 
 `related` is a REPORTED class, never a modeled one (see split.py's measured
 starvation: 1/0/4 across partitions). It is excluded from the fit target and
@@ -21,9 +26,9 @@ report, not for training.
 Artifacts: the fitted (scaler, classifier) pair is pickled to
 artifacts/models/<model_version>.joblib (gitignored — a build product,
 regenerable from a fixed model_version/feature_version/split_version). The
-durable, versioned record is model_registry (migration 012); model outputs
-land in model_predictions (migration 011), one immutable row per
-(candidate, model_version).
+durable, versioned record is model_registry (migration 012); model outputs land
+in model_predictions (migration 011), one row per (candidate, model_version),
+mutable until model_registry.metrics_summary is set (M5.5 freezes it).
 """
 from __future__ import annotations
 
@@ -244,7 +249,12 @@ async def run_train(*, model_version: str = MODEL_VERSION, persist_rows: bool = 
                              (candidate_id, model_version, feature_version, probability,
                               predicted_label, feature_snapshot)
                            values (%s,%s,%s,%s,%s,%s)
-                           on conflict (candidate_id, model_version) do nothing""",
+                           on conflict (candidate_id, model_version) do update set
+                             probability = excluded.probability,
+                             predicted_label = excluded.predicted_label,
+                             feature_snapshot = excluded.feature_snapshot,
+                             feature_version = excluded.feature_version,
+                             created_at = now()""",
                         pred_rows,
                     )
             await conn.execute(

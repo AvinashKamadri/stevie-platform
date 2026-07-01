@@ -2,9 +2,15 @@
 --
 -- Model outputs live SEPARATELY from the (immutable) feature store, so a
 -- retrain, recalibration, or model-version comparison never touches
--- organization_merge_candidate. A row here is never overwritten — a new model
--- run is new rows keyed by model_version, so a past evaluation stays
--- reproducible even after later models are added.
+-- organization_merge_candidate.
+--
+-- Mutability: a row is free to be UPDATED (upsert on candidate_id+model_version)
+-- while its model_version is still unfrozen — training then calibrating the
+-- same version is expected to supersede the row with a better probability (raw
+-- -> Platt-calibrated). Once model_registry.metrics_summary is set for that
+-- version (the M5.5 frozen evaluation has run), scorer.run_train and
+-- calibration.run_calibrate both refuse to touch it again — a genuinely new
+-- result is a NEW model_version, so a past evaluation stays reproducible.
 --
 -- candidate_id FKs into organization_merge_candidate(id), which is NOT stable
 -- across candidate regeneration (candidates.persist() truncates + restarts
@@ -38,10 +44,12 @@ create index if not exists model_predictions_candidate_idx on model_predictions 
 create index if not exists model_predictions_version_idx   on model_predictions (model_version);
 
 comment on table model_predictions is
-    'Immutable model outputs, one row per (candidate, model_version). Never '
-    'overwritten — retraining/recalibration adds new model_version rows so past '
-    'evaluations stay reproducible. Cascades on organization_merge_candidate '
-    'regeneration (candidate_id is only valid within one generation).';
+    'Model outputs, one row per (candidate, model_version). Mutable while the '
+    'model_version is unfrozen (model_registry.metrics_summary null) — training '
+    'then calibrating the same version supersedes the row. Frozen (metrics_summary '
+    'set) versions are never touched again; a new result is a new model_version. '
+    'Cascades on organization_merge_candidate regeneration (candidate_id is only '
+    'valid within one generation).';
 comment on column model_predictions.feature_snapshot is
     'The exact feature vector used for this prediction, frozen at prediction '
     'time — answers "why did this model think X?" even after feature_version advances.';
