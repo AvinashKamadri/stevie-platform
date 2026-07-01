@@ -126,7 +126,8 @@ async def run_evaluate(*, model_version: str = MODEL_VERSION_DEFAULT, corpus: st
                  from model_predictions mp
                  left join organization_merge_candidate omc
                    on omc.left_key = mp.left_key and omc.right_key = mp.right_key
-                where mp.model_version = %s""",
+                where mp.model_version = %s
+                order by mp.left_key, mp.right_key""",
             (model_version,),
         )
         pred_rows = await cur.fetchall()
