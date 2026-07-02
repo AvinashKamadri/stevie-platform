@@ -85,6 +85,13 @@ Key points:
 - **`split_v2` has no `evaluation` bucket.** Evaluation lives in the frozen file,
   external to the hash. `split_v2` only partitions the *non-benchmark* pool into
   train / calibration / **validation**.
+- **`split_v2` hashes INDEPENDENTLY of v1** (salted digest `split_v2\x00lk\x00rk`).
+  This is not cosmetic: the benchmark *is* v1's top-20% fraction band, so the
+  non-benchmark pool spans only the bottom 80% of v1's hash. Reusing v1's
+  fraction would strand any v2 bucket above 0.8 — validation (`[0.85,1.0)`) would
+  always be empty. Caught by the Slice 2 dry run (`validation=0`); fixed by
+  salting. Lesson: a "reuse the hash" shortcut silently correlated the split with
+  the benchmark removal.
 - **Validation is new in v2** (M5 had only train/calibration/evaluation). Its
   job: any model or threshold selection happens here, so we never tune against
   the benchmark. The benchmark is still touched exactly once, at the very end.

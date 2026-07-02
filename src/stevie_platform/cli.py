@@ -128,6 +128,10 @@ async def _main(argv: list[str]) -> int:
     bm = sub.add_parser("benchmark", help="M6: freeze/verify the immutable evaluation benchmark")
     bm.add_argument("--freeze", action="store_true", help="materialize the frozen benchmark (once; refuses to overwrite)")
     bm.add_argument("--force", action="store_true", help="overwrite an existing frozen benchmark (mint a new version deliberately)")
+    fv = sub.add_parser("fit-v2", help="M6 Slice 2: train+calibrate+evaluate the v2 scorer on the frozen benchmark")
+    fv.add_argument("--model-version", default="v2", help="v2 model version tag (default: v2)")
+    fv.add_argument("--corpus", default="v3", help="training corpus version (default: v3)")
+    fv.add_argument("--no-persist", action="store_true", help="dry run: fit + A/B report, don't write artifact/registry (avoids freezing)")
     sm = sub.add_parser("sample", help="M6: emit the active-learning review queue (uncertainty-ranked)")
     sm.add_argument("--model-version", default="v1.2", help="model whose predictions to rank (default: v1.2, the production model)")
     sm.add_argument("--limit", type=int, default=100, help="queue size (default: 100)")
@@ -229,6 +233,10 @@ async def _main(argv: list[str]) -> int:
             from stevie_platform.canonical.benchmark import run_benchmark
             v = await run_benchmark(do_freeze=args.freeze, force=args.force)
             rc = 0 if (args.freeze or v.get("ok")) else 1
+        elif args.cmd == "fit-v2":
+            from stevie_platform.canonical.scorer_v2 import run_fit_v2
+            await run_fit_v2(model_version=args.model_version, corpus=args.corpus,
+                             persist=not args.no_persist)
         elif args.cmd == "sample":
             from stevie_platform.canonical.active_learning import run_sample
             await run_sample(model_version=args.model_version, limit=args.limit,

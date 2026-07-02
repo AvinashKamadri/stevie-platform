@@ -157,10 +157,31 @@ active-learning labels are excluded from the queue at selection time
 | Slice | Deliverable | Status |
 |---|---|---|
 | **1 — Infrastructure** | Frozen-benchmark mechanism + contamination guard (`canonical/benchmark.py`); uncertainty-sampling queue (`canonical/active_learning.py`); CLI `benchmark` + `sample`; pure-core tests. | **built** (pure cores verified offline; pytest run pending venv) |
-| **2 — Baseline impl** | Wire benchmark + guard into a v2 training path; label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. | **designed** ([M6_SLICE2_DESIGN.md](M6_SLICE2_DESIGN.md)); impl deferred to live env |
+| **2 — Baseline impl** | Wire benchmark + guard into a v2 training path; label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. | **pipeline built + validated live** ([M6_SLICE2_DESIGN.md](M6_SLICE2_DESIGN.md)); awaits label round 1 |
 | **3 — Evaluation** | One frozen eval of v2 on the pinned benchmark; label-efficiency + ablation numbers. | todo |
 | **4 — Refinement** | Iterate sampling / additional label rounds while budget and returns justify it. | todo |
 | **5 — Documentation** | Record v2 in `model_registry`; update `ORG_RESOLUTION` to v2.0; M6 close-out (observed vs. targeted metrics). | todo |
+
+### Slice 2 — what shipped (pipeline; awaits labels)
+
+- `canonical/split_v2.py` — three-way train/calibration/validation split
+  (70/15/15), **independently hashed** from v1 (salted; see design §4 for why).
+- `canonical/scorer_v2.py` — v2 dataset assembly (benchmark subtracted by set
+  membership; provenance defaults) → **early `assert_no_contamination`** →
+  fit (logistic regression, feature v3, reusing M5's pure math) → Platt →
+  evaluate on the 112 frozen pairs → A/B vs v1.2 + JSON mirrors.
+- CLI `stevie fit-v2 [--no-persist] [--model-version …] [--corpus …]`.
+- Corpus `v3` registered; `artifacts/metrics/` + `artifacts/calibration/` JSON
+  mirrors now git-tracked (joblibs stay ignored).
+- Tests: `tests/test_split_v2.py`; full suite **130 passed** on the live env.
+
+**Live validation + ablation baseline (2026-07-02):** M5 v1.2 reproduces at
+recall 0.645 exactly. With the pipeline built but **no active-learning labels
+yet** (corpus v3 == v2), the control model `v2-ablation` scores **recall 0.613 /
+precision 0.905** on the frozen benchmark — *below* v1.2's 0.645 recall, because
+the new validation split removes 76 pairs from training. This is the honest
+starting line: **active learning must first recover ~0.03 recall before any gain
+is real.** The guard fired correctly (pool disjoint); re-persist refused (frozen).
 
 ### Slice 1 — what shipped
 
