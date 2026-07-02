@@ -33,6 +33,10 @@
         {
           "file": "supplement.jsonl",
           "description": "Mined hard cases (see v2)."
+        },
+        {
+          "file": "active_round_1.jsonl",
+          "description": "M6 active-learning round 1 (AI-assisted, per LABELING_GUIDE.md; 11 ambiguous pairs held for human review)."
         }
       ]
     }

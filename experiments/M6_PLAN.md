@@ -158,9 +158,9 @@ active-learning labels are excluded from the queue at selection time
 |---|---|---|
 | **1 — Infrastructure** | Frozen-benchmark mechanism + contamination guard (`canonical/benchmark.py`); uncertainty-sampling queue (`canonical/active_learning.py`); CLI `benchmark` + `sample`; pure-core tests. | **built** (pure cores verified offline; pytest run pending venv) |
 | **2 — Baseline impl** | Wire benchmark + guard into a v2 training path; label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. | **pipeline built + validated live** ([M6_SLICE2_DESIGN.md](M6_SLICE2_DESIGN.md)); awaits label round 1 |
-| **3 — Evaluation** | One frozen eval of v2 on the pinned benchmark; label-efficiency + ablation numbers. | todo |
-| **4 — Refinement** | Iterate sampling / additional label rounds while budget and returns justify it. | todo |
-| **5 — Documentation** | Record v2 in `model_registry`; update `ORG_RESOLUTION` to v2.0; M6 close-out (observed vs. targeted metrics). | todo |
+| **3 — Evaluation** | One frozen eval of v2 on the pinned benchmark; label-efficiency + ablation numbers. | **done** — v2 recall 0.677 / precision 0.913, criteria met ([M6_RESULTS.md](entity_resolution/M6_RESULTS.md)) |
+| **4 — Refinement** | Iterate sampling / additional label rounds while budget and returns justify it. | round 2 recommended (round-1 gain = +1 TP, noise-adjacent) |
+| **5 — Documentation** | Record v2 in `model_registry`; update `ORG_RESOLUTION` to v2.0; M6 close-out (observed vs. targeted metrics). | LABELING_GUIDE + M6_RESULTS written; promotion/tag pending label validation |
 
 ### Slice 2 — what shipped (pipeline; awaits labels)
 
