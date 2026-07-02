@@ -1,10 +1,42 @@
 # M6 Plan — Active Learning → v2 Scorer Retrain
 
-Status: **DESIGN** (opened 2026-07-02, branch `m6-active-learning`).
-Owner: avinash@flashbacklabs.com.
+Status: **CLOSED — COMPLETE** (opened + closed 2026-07-02, branch
+`m6-active-learning`). Owner: avinash@flashbacklabs.com.
 
 This document is the single source of truth for M6. **If the plan changes,
 update this file _before_ changing code** (the discipline that carried M5).
+
+---
+
+## M6 close-out
+
+**Milestone question — "does an active-learning loop improve the scorer?" —
+answered: YES**, with reproducible evidence isolating the data's effect (model +
+features held fixed):
+
+| | Recall | Precision |
+|---|---|---|
+| Round 0 (M5 v1.2 baseline) | 0.645 | 0.870 |
+| Pipeline control (v2, no new labels) | 0.613 | 0.905 |
+| **Round 1 (v2, +89 labels)** | **0.677** | **0.913** |
+
+Both pre-registered success criteria met (recall > 0.645, precision ≥ 0.88).
+Effect size is honest-small (recall = +1 TP on 31 positives; precision the more
+solid win). See [entity_resolution/M6_RESULTS.md](entity_resolution/M6_RESULTS.md).
+
+**Production decision: v1.2 stays production; v2 is experimental/frozen.** The
+research question is answered, but production deserves a higher bar than one
+round of AI-assisted labels with 11 pairs still unresolved. Tagged `m6-round1`
+(experimental milestone, NOT a production release).
+
+**Next cycle (not part of closed M6):**
+- **M6.1 — validation:** manually review the 11 held pairs; validate a random
+  sample of the 89 AI-assisted labels against `entity_resolution/LABELING_GUIDE.md`;
+  correct inconsistencies.
+- **M6.2 — round 2:** `stevie sample --model-version v2` → label → `fit-v2`.
+  If recall climbs again with precision held, **promote v2** (tag + set as
+  production). If it flattens, keep v1.2 and investigate.
+- Then pivot to the product roadmap (Phase 1 blog linking / source confidence).
 
 ---
 
