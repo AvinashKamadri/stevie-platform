@@ -1,0 +1,13 @@
+{
+  "benchmark_version": "v1",
+  "source_corpus": "v2",
+  "source_split_version": "v1",
+  "n_pairs": 112,
+  "label_counts": {
+    "distinct": 77,
+    "merge": 31,
+    "related": 4
+  },
+  "digest_sha256": "59163b7b4f12e44f134f89e0daffde7679bdd8bb31d4244de07727c63828ec6b",
+  "note": "Immutable M5 evaluation set. New labels go to train/calibration only."
+}

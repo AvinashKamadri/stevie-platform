@@ -1,0 +1,100 @@
+{"left_key": "metlife asia ltd hong kong metlife china", "right_key": "metlife china", "probability": 0.500075, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "riversource insurance", "right_key": "riversource life", "probability": 0.499816, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "mint", "right_key": "united states mint - washington dc", "probability": 0.500202, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "admedika - telkom indonesia group", "right_key": "telkom indonesia", "probability": 0.499734, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "sm shopping center chengdu co ltd", "right_key": "sm shopping center tianjin", "probability": 0.499728, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "solo-e com", "right_key": "solo-entrepreneur com", "probability": 0.499666, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "bluecat networks inc toronto ontario", "right_key": "bluecat networks toronto on canada", "probability": 0.500412, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express ghana", "right_key": "dhl express lima", "probability": 0.500597, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express india", "right_key": "dhl express lima", "probability": 0.500597, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express india", "right_key": "dhl express mena", "probability": 0.500597, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express kenya", "right_key": "dhl express lima", "probability": 0.500597, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express kenya", "right_key": "dhl express mena", "probability": 0.500597, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "mccain consulting", "right_key": "mccain foods", "probability": 0.499323, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "mohawk industries", "right_key": "the mohawk group", "probability": 0.499323, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "income access a paysafe company montreal qc", "right_key": "paysafe", "probability": 0.50071, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "nu skin enterprises singapore", "right_key": "nu skin enterprises southeast asia region", "probability": 0.499195, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "rainbow chicken", "right_key": "rainbow communication", "probability": 0.500855, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "amyris", "right_key": "pipette and purecane amyris brands", "probability": 0.500864, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "compass chc of barnstaple", "right_key": "compass group", "probability": 0.500882, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "extreme networks san jose", "right_key": "extreme reach", "probability": 0.500882, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "llorente cuenca", "right_key": "llorente y cuenca madrid sl esb82894122", "probability": 0.50113, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "acuity", "right_key": "hr acuity florham park nj", "probability": 0.501261, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "atomic 212", "right_key": "atomic pr", "probability": 0.501317, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "chorus ai", "right_key": "chorus one", "probability": 0.501317, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express isando", "right_key": "dhl express switzerland", "probability": 0.498468, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express rwanda", "right_key": "dhl express switzerland", "probability": 0.498468, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express switzerland", "right_key": "dhl express uganda", "probability": 0.498468, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "nec corporation india", "right_key": "nec corporation of america", "probability": 0.498395, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "bosch group", "right_key": "bosch thermotechnology north america", "probability": 0.501707, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "imperial brands", "right_key": "imperial tobacco canada limited montreal", "probability": 0.498226, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "newlink communications", "right_key": "newlink corporate", "probability": 0.497963, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "transcend academy", "right_key": "transcend technologies", "probability": 0.497963, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "tbwa group istanbul", "right_key": "tbwa istanbul", "probability": 0.497947, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "blue cross blue shield of florida", "right_key": "blue cross of idaho", "probability": 0.497796, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "xo group", "right_key": "xo marketing group", "probability": 0.497599, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dimes gida", "right_key": "dimes sanayi ve ticaret a", "probability": 0.497388, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "yalla ludo", "right_key": "yalla technology fz-llc", "probability": 0.497388, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "mission 4 sight cloquet", "right_key": "sight", "probability": 0.502628, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "dhl express argentina s a", "right_key": "dhl express mena", "probability": 0.502636, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "astrazeneca kazakhstan", "right_key": "representative office astrazeneca uk limited in kazakhstan", "probability": 0.497325, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "travelport digital", "right_key": "travelport locomote melbourne vic", "probability": 0.49723, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "llorente y cuenca", "right_key": "llyc llorente y cuenca", "probability": 0.502803, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "ogilvy public relations istanbul", "right_key": "public relations", "probability": 0.502806, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "appa", "right_key": "australasian promotional products association", "probability": 0.502824, "reasons": ["acronym"], "strategy": "uncertainty"}
+{"left_key": "msw interactive designs llc knoxville tn", "right_key": "msw interactive designs llc washington dc", "probability": 0.497149, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "reed elsevier nv amsterdam the netherlands", "right_key": "reed elsevier philippines", "probability": 0.502887, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "hunter plastic surgery charlestown nsw australia", "right_key": "the surgery", "probability": 0.497111, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "sm supermalls china", "right_key": "sm supermalls sm city clark", "probability": 0.502894, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "oasis brand communications", "right_key": "oasis cadde", "probability": 0.503298, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "dhl express - philippines", "right_key": "dhl express egypt", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express - philippines", "right_key": "dhl express ghana", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express - philippines", "right_key": "dhl express india", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express - philippines", "right_key": "dhl express kenya", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express - philippines", "right_key": "dhl express qatar", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express chile", "right_key": "dhl express switzerland", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express egypt", "right_key": "dhl express switzerland", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express ghana", "right_key": "dhl express switzerland", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express india", "right_key": "dhl express switzerland", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express kenya", "right_key": "dhl express switzerland", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express qatar", "right_key": "dhl express switzerland", "probability": 0.503376, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "edelman ergo", "right_key": "novartis consumer health gmbh edelman ergo", "probability": 0.496548, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "dhl express argentina", "right_key": "dhl express ghana", "probability": 0.496484, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "design studio ionoi", "right_key": "ionoi studio", "probability": 0.503663, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "bmc houston", "right_key": "bmc software houston", "probability": 0.503701, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "mcgallen and bolden", "right_key": "mcgallen bolden group", "probability": 0.503813, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "wells fargo bank - treasury management client services", "right_key": "wells fargo treasury management client delivery", "probability": 0.503829, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "sm supermalls china", "right_key": "sm supermalls sm city baguio", "probability": 0.50385, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "sm supermalls china", "right_key": "sm supermalls sm city tarlac", "probability": 0.50385, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "blackboard inc washington", "right_key": "blackboard washington d c", "probability": 0.50388, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express - saudi arabia", "right_key": "dhl express india", "probability": 0.496108, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dhl express india", "right_key": "dhl express saudi arabia", "probability": 0.496108, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "curriculum advantage", "right_key": "curriculum associates north billerica", "probability": 0.496059, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "hoffmann und campe corporate publishing", "right_key": "ringzwei hoffmann und campe corporate publishing", "probability": 0.496051, "reasons": ["rare_token", "trigram"], "strategy": "uncertainty"}
+{"left_key": "velocity consulting", "right_key": "velocity global", "probability": 0.50416, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "weber shandwick belgium", "right_key": "weber shandwick the netherlands", "probability": 0.50427, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "weber shandwick germany", "right_key": "weber shandwick the netherlands", "probability": 0.50427, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "fannie mae", "right_key": "fanniemae", "probability": 0.504298, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "indian oil", "right_key": "indianoil", "probability": 0.504298, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "international business machine", "right_key": "international sos", "probability": 0.495577, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "domino s pizza istanbul", "right_key": "domino s pizza turkiye", "probability": 0.495541, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "sm supermalls china", "right_key": "sm supermalls sm city baliwag", "probability": 0.504493, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "sm supermalls china", "right_key": "sm supermalls sm city bicutan", "probability": 0.504493, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "sm supermalls china", "right_key": "sm supermalls sm city marilao", "probability": 0.504493, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "tata consultancy services asia pacific", "right_key": "tata consultancy services philippines", "probability": 0.495491, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "heinz", "right_key": "kraft heinz glenview il usa", "probability": 0.495388, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "nu skin enterprises hong kong", "right_key": "nu skin enterprises philippines", "probability": 0.495363, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "international cybernetics icc", "right_key": "international sos", "probability": 0.504641, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "nuance communications and gold coast health", "right_key": "nuance communications and mackay hospital and health services", "probability": 0.504769, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "pt unilever indonesia tbk", "right_key": "unilever indonesia", "probability": 0.495182, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "a closer look", "right_key": "look", "probability": 0.504821, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "hanaroadcom 하나로애드컴", "right_key": "하나로애드컴", "probability": 0.495119, "reasons": ["rare_token"], "strategy": "uncertainty"}
+{"left_key": "access brand communications", "right_key": "access communications", "probability": 0.505023, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "john hancock funds", "right_key": "john hancock investments", "probability": 0.505123, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "dell inc round rock", "right_key": "dell round rock", "probability": 0.494761, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "mercedes-benz s-class launch", "right_key": "msl", "probability": 0.505267, "reasons": ["acronym"], "strategy": "uncertainty"}
+{"left_key": "ncr corporation dayton", "right_key": "ncr corporation duluth ga usa", "probability": 0.505295, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "harri", "right_key": "harris", "probability": 0.494611, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "jacob", "right_key": "jacobs", "probability": 0.494611, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "merck", "right_key": "mercku", "probability": 0.494611, "reasons": ["trigram"], "strategy": "uncertainty"}
+{"left_key": "prone", "right_key": "pronet", "probability": 0.494611, "reasons": ["trigram"], "strategy": "uncertainty"}

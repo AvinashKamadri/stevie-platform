@@ -20,3 +20,12 @@ snapshots/**/dump.err
 # solver, fixed random_state). model_registry (migration 012) is the durable
 # record; the pickle itself is a build product, not source.
 artifacts/
+# ...but DO track the small JSON metric/calibration mirrors (M6): they make an
+# M5-vs-v2 A/B a git diff and travel outside the DB (design Q4). Binary joblibs
+# stay ignored above.
+!artifacts/
+!artifacts/metrics/
+!artifacts/metrics/*.json
+!artifacts/calibration/
+!artifacts/calibration/*.json
+artifacts/models/
