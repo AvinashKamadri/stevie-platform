@@ -1,0 +1,9 @@
+# Normalize all text to LF in the repo; check out LF on every platform.
+# Prevents whole-repo CRLF churn when edited from Windows/WSL editors.
+* text=auto eol=lf
+
+# Binary / snapshot artifacts: never touch.
+*.png binary
+*.jpg binary
+*.pdf binary
+snapshots/**/SHA256SUMS -text
