@@ -132,6 +132,8 @@ async def _main(argv: list[str]) -> int:
     fv.add_argument("--model-version", default="v2", help="v2 model version tag (default: v2)")
     fv.add_argument("--corpus", default="v3", help="training corpus version (default: v3)")
     fv.add_argument("--no-persist", action="store_true", help="dry run: fit + A/B report, don't write artifact/registry (avoids freezing)")
+    cf = sub.add_parser("confidence", help="M7: compute per-entity fact confidence (or --report)")
+    cf.add_argument("--report", action="store_true", help="print distributions + low-confidence tail (don't recompute)")
     el = sub.add_parser("export-labels", help="M6: export reviewed decisions to a gold round + register under corpus v3")
     el.add_argument("--round", type=int, required=True, dest="review_round", help="active-learning round number (>=1)")
     el.add_argument("--source", default="active_learning", help="provenance source tag (default: active_learning)")
@@ -241,6 +243,13 @@ async def _main(argv: list[str]) -> int:
             from stevie_platform.canonical.scorer_v2 import run_fit_v2
             await run_fit_v2(model_version=args.model_version, corpus=args.corpus,
                              persist=not args.no_persist)
+        elif args.cmd == "confidence":
+            if args.report:
+                from stevie_platform.canonical.confidence import run_confidence_report
+                await run_confidence_report()
+            else:
+                from stevie_platform.canonical.confidence import run_confidence
+                await run_confidence()
         elif args.cmd == "export-labels":
             from stevie_platform.canonical.active_learning import run_export_labels
             await run_export_labels(review_round=args.review_round, source=args.source,
