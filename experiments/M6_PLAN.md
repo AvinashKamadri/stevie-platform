@@ -157,7 +157,7 @@ active-learning labels are excluded from the queue at selection time
 | Slice | Deliverable | Status |
 |---|---|---|
 | **1 — Infrastructure** | Frozen-benchmark mechanism + contamination guard (`canonical/benchmark.py`); uncertainty-sampling queue (`canonical/active_learning.py`); CLI `benchmark` + `sample`; pure-core tests. | **built** (pure cores verified offline; pytest run pending venv) |
-| **2 — Baseline impl** | Wire benchmark + guard into a v2 training path; label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. | todo |
+| **2 — Baseline impl** | Wire benchmark + guard into a v2 training path; label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. | **designed** ([M6_SLICE2_DESIGN.md](M6_SLICE2_DESIGN.md)); impl deferred to live env |
 | **3 — Evaluation** | One frozen eval of v2 on the pinned benchmark; label-efficiency + ablation numbers. | todo |
 | **4 — Refinement** | Iterate sampling / additional label rounds while budget and returns justify it. | todo |
 | **5 — Documentation** | Record v2 in `model_registry`; update `ORG_RESOLUTION` to v2.0; M6 close-out (observed vs. targeted metrics). | todo |
