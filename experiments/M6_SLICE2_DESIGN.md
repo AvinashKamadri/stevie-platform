@@ -1,10 +1,11 @@
 # M6 Slice 2 — v2 Training Pipeline (DESIGN, not yet implemented)
 
-Status: **DESIGN — review before code.** Opened 2026-07-02 on branch
-`m6-active-learning`. Implementation is deliberately deferred until the
-environment is up (`make install && make db && make migrate`) so the new
-training path can be verified against a **live M5 reproduction** — proving the
-baseline didn't move.
+Status: **DESIGN — decision-complete, review before code.** Opened 2026-07-02 on
+branch `m6-active-learning`. All open questions resolved to recommended defaults
+(§12; override anytime — no code exists yet). Implementation is deliberately
+deferred until the environment is up (`make install && make db && make migrate`)
+so the new training path can be verified against a **live M5 reproduction** —
+proving the baseline didn't move.
 
 This document is reviewed *before* the code exists on purpose: Slice 2 touches
 the training pipeline, and a design is far cheaper to change than a refactor.
@@ -235,21 +236,31 @@ chains all three (stopping if the guard fires) is optional.
 - Reuse contracts: assert `scorer_v2` calls `scorer.fit_model` /
   `calibration.fit_platt` (no reimplementation drift).
 
-## 12. Open questions for you (decide before implementation)
+## 12. Decisions (provisional defaults — override any before implementation)
 
-- **Q1 — `split_v2` ratios.** Proposed 70/15/15 (train/calibration/validation).
-  Alternative: 70/30 train/calibration with validation drawn from a held-out
-  slice only when a model-selection decision actually arises.
-- **Q2 — v2 model family.** Strong recommendation: keep logistic regression +
-  feature_version v3, identical to v1.2, so the A/B isolates the data. Confirm,
-  or name the one model change you want to test (and accept a less clean
-  attribution).
-- **Q3 — re-label precedence.** If a pair is labeled in original gold *and*
-  re-surfaced/relabeled in an AL round, which wins? Proposed: newest round wins
-  (order `active_round_*` last in the corpus manifest so dedup keeps it).
-- **Q4 — metrics/calibration JSON mirrors.** Adopt the `artifacts/metrics/` +
-  `artifacts/calibration/` file layout (recommended, git-diffable A/B), or rely
-  on `model_registry` alone?
+These were flagged as your calls; each is set to the recommended default so the
+design is implementation-ready. All are cheap to reverse — none has been coded.
+Say the word to change any.
+
+- **Q1 — `split_v2` ratios → 70/15/15 (train/calibration/validation).** DECIDED.
+  Standard proportions; validation large enough to be informative for model/
+  threshold selection without starving train. Revisit if train support proves
+  too thin after the benchmark is subtracted.
+- **Q2 — v2 model family → logistic regression + feature_version v3, identical
+  to v1.2.** DECIDED (the load-bearing one). Only the training *data* changes, so
+  any recall movement is attributable to the labels, not the model. Changing the
+  model is a *separate* later experiment, never bundled with a data change.
+- **Q3 — re-label precedence → newest round wins.** DECIDED. `active_round_*`
+  components are ordered last in the `v3` manifest; the existing dedup-by-ordered-
+  pair loader keeps the last occurrence, so a re-labeled pair supersedes its
+  original gold label cleanly.
+- **Q4 — artifact JSON mirrors → adopt `artifacts/metrics/` +
+  `artifacts/calibration/`.** DECIDED. `model_registry` stays the durable truth;
+  the per-version JSON files make the A/B a git diff and travel outside the DB.
+
+> These defaults are recorded so implementation isn't blocked on a round-trip.
+> They are provisional: overriding any is a one-line change to this section, not
+> a code refactor, because no Slice 2 code exists yet.
 
 ---
 
