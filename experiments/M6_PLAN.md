@@ -127,7 +127,21 @@ comparability with M5.
 **Decision:** pin the exact M5 evaluation pair-set as a fixed held-out
 benchmark. New labels are routed into **train + calibration only**. M5 vs v2
 recall is then measured on the *identical* evaluation pairs → a clean A/B.
-(Implementation lands in Slice 1.)
+
+**Acceptance criterion (regression guard):** if any pair from the frozen
+evaluation set appears in the active-learning training pool, the pipeline
+**fails with an explicit error** (`BenchmarkContaminationError`) rather than
+relying on convention — a stronger guarantee that survives future edits and a
+possible `SPLIT_VERSION` bump.
+
+**Delivered in Slice 1** (`canonical/benchmark.py`): the frozen set is
+materialized to `gold/frozen_benchmark_v1.jsonl` (**112 pairs**: 31 merge / 77
+distinct / 4 related — the `related=4` matches the M5 record exactly, confirming
+the pin reproduces the true M5 evaluation partition). The file carries a content
+digest so any edit is detected by `stevie benchmark` (verify). New
+active-learning labels are excluded from the queue at selection time
+(`active_learning._excluded_pairs`) *and* barred at train time by
+`assert_no_contamination` — belt and suspenders.
 
 ## 7. Rollback criteria
 
@@ -140,13 +154,28 @@ recall is then measured on the *identical* evaluation pairs → a clean A/B.
 
 ## 8. Slices (M5's disciplined pattern)
 
-| Slice | Deliverable |
-|---|---|
-| **1 — Infrastructure** | Uncertainty-sampling query + review prioritization; frozen-benchmark mechanism (pin M5 eval pairs; route new labels to train/calibration). |
-| **2 — Baseline impl** | Label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. |
-| **3 — Evaluation** | One frozen eval of v2 on the pinned benchmark; label-efficiency + ablation numbers. |
-| **4 — Refinement** | Iterate sampling / additional label rounds while budget and returns justify it. |
-| **5 — Documentation** | Record v2 in `model_registry`; update `ORG_RESOLUTION` to v2.0; M6 close-out (observed vs. targeted metrics). |
+| Slice | Deliverable | Status |
+|---|---|---|
+| **1 — Infrastructure** | Frozen-benchmark mechanism + contamination guard (`canonical/benchmark.py`); uncertainty-sampling queue (`canonical/active_learning.py`); CLI `benchmark` + `sample`; pure-core tests. | **built** (pure cores verified offline; pytest run pending venv) |
+| **2 — Baseline impl** | Wire benchmark + guard into a v2 training path; label round 1 (budgeted); retrain + calibrate v2 on expanded corpus. | todo |
+| **3 — Evaluation** | One frozen eval of v2 on the pinned benchmark; label-efficiency + ablation numbers. | todo |
+| **4 — Refinement** | Iterate sampling / additional label rounds while budget and returns justify it. | todo |
+| **5 — Documentation** | Record v2 in `model_registry`; update `ORG_RESOLUTION` to v2.0; M6 close-out (observed vs. targeted metrics). | todo |
+
+### Slice 1 — what shipped
+
+- `canonical/benchmark.py` — pure `build_frozen_pairs`, `freeze` (once,
+  overwrite-guarded), `verify` (digest + label cross-check; corpus growth never
+  fails it), and `assert_no_contamination` (the regression guard).
+- `canonical/active_learning.py` — deterministic `rank_by_uncertainty` (|p−0.5|,
+  key tie-break) + `select_queue` (optional deterministic random-mix to counter
+  sampling bias); `run_sample` reads `model_predictions`, excludes
+  benchmark/labeled/decided pairs, writes a queue JSONL. Read-only; writes
+  nothing to the DB.
+- CLI: `stevie benchmark [--freeze]`, `stevie sample --model-version v1.2 --limit N`.
+- Tests: `tests/test_benchmark.py`, `tests/test_active_learning.py` (14 pure-core
+  checks green under a stdlib harness; run under pytest once the venv exists).
+- Artifact: `gold/frozen_benchmark_v1.jsonl` + `.manifest.json` (committed).
 
 ---
 

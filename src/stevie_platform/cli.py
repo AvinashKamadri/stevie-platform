@@ -125,6 +125,14 @@ async def _main(argv: list[str]) -> int:
     rv.add_argument("--limit", type=int, default=50, help="max pairs to load into the session (default: 50)")
     rc = sub.add_parser("recall")
     rc.add_argument("--corpus", default=None, help="gold corpus version (e.g. v1, v2; default from CORPUS.json)")
+    bm = sub.add_parser("benchmark", help="M6: freeze/verify the immutable evaluation benchmark")
+    bm.add_argument("--freeze", action="store_true", help="materialize the frozen benchmark (once; refuses to overwrite)")
+    bm.add_argument("--force", action="store_true", help="overwrite an existing frozen benchmark (mint a new version deliberately)")
+    sm = sub.add_parser("sample", help="M6: emit the active-learning review queue (uncertainty-ranked)")
+    sm.add_argument("--model-version", default="v1.2", help="model whose predictions to rank (default: v1.2, the production model)")
+    sm.add_argument("--limit", type=int, default=100, help="queue size (default: 100)")
+    sm.add_argument("--random-fraction", type=float, default=0.0, help="share of slots reserved for a deterministic random sample (default: 0.0)")
+    sm.add_argument("--out", default=None, help="output queue filename under the gold dir (default: active_queue_<model>.jsonl)")
     sub.add_parser("report")
     sub.add_parser("metrics")
     sub.add_parser("gates")
@@ -217,6 +225,14 @@ async def _main(argv: list[str]) -> int:
         elif args.cmd == "recall":
             from stevie_platform.canonical.recall import run_recall
             await run_recall(corpus=args.corpus)
+        elif args.cmd == "benchmark":
+            from stevie_platform.canonical.benchmark import run_benchmark
+            v = await run_benchmark(do_freeze=args.freeze, force=args.force)
+            rc = 0 if (args.freeze or v.get("ok")) else 1
+        elif args.cmd == "sample":
+            from stevie_platform.canonical.active_learning import run_sample
+            await run_sample(model_version=args.model_version, limit=args.limit,
+                             random_fraction=args.random_fraction, out_path=args.out)
         elif args.cmd == "report":
             from stevie_platform.canonical.report import print_report
             await print_report()
