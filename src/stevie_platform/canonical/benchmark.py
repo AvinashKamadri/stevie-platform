@@ -221,26 +221,26 @@ async def run_benchmark(*, do_freeze: bool = False, force: bool = False) -> dict
     if do_freeze:
         manifest = freeze(force=force)
         print("\n" + "=" * 60)
-        print(f" FROZEN BENCHMARK {manifest['benchmark_version']}  —  materialized")
+        print(f" FROZEN BENCHMARK {manifest['benchmark_version']}  -  materialized")
         print("=" * 60)
         print(f"  source corpus / split   {manifest['source_corpus']} / {manifest['source_split_version']}")
         print(f"  evaluation pairs        {manifest['n_pairs']}")
         print(f"  labels                  {manifest['label_counts']}")
-        print(f"  digest                  {manifest['digest_sha256'][:16]}…")
+        print(f"  digest                  {manifest['digest_sha256'][:16]}...")
         print("=" * 60 + "\n")
         return manifest
 
     v = verify()
     print("\n" + "=" * 60)
-    print(f" FROZEN BENCHMARK {v['benchmark_version']}  —  verify")
+    print(f" FROZEN BENCHMARK {v['benchmark_version']}  -  verify")
     print("=" * 60)
     print(f"  evaluation pairs        {v['n_pairs']}")
-    print(f"  content digest          {'OK' if v['digest_ok'] else '✗ MISMATCH'}")
+    print(f"  content digest          {'OK' if v['digest_ok'] else 'MISMATCH'}")
     if v["relabeled"]:
-        print(f"  ⚠ relabeled pairs       {len(v['relabeled'])}  (benchmark pair changed meaning!)")
+        print(f"  [!] relabeled pairs     {len(v['relabeled'])}  (benchmark pair changed meaning!)")
     if v["dropped_from_corpus"]:
-        print(f"  ⚠ dropped from corpus   {len(v['dropped_from_corpus'])}")
+        print(f"  [!] dropped from corpus {len(v['dropped_from_corpus'])}")
     print(f"  reserved new-eval pairs {v['reserved_new_eval_pairs']}  (held out of training AND benchmark)")
-    print(f"  status                  {'OK ✅' if v['ok'] else 'FAILED ✗'}")
+    print(f"  status                  {'OK' if v['ok'] else 'FAILED'}")
     print("=" * 60 + "\n")
     return v

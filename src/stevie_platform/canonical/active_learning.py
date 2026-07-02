@@ -157,7 +157,7 @@ async def run_sample(*, model_version: str, limit: int = 100,
         "by_strategy": strat, "out_path": str(out),
     }
     print("\n" + "=" * 60)
-    print(f" ACTIVE-LEARNING QUEUE  —  model {model_version}")
+    print(f" ACTIVE-LEARNING QUEUE  -  model {model_version}")
     print("=" * 60)
     print(f"  scored predictions      {summary['scored_pool']:>8,}")
     print(f"  excluded (bench/labeled/decided) {summary['excluded']:>8,}")
