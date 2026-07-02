@@ -170,3 +170,66 @@ async def run_sample(*, model_version: str, limit: int = 100,
     print(f"  queue -> {out}")
     print("=" * 60 + "\n")
     return summary
+
+
+async def run_export_labels(*, review_round: int, source: str = "active_learning",
+                            out_path: str | None = None) -> dict:
+    """Export reviewed merge/distinct decisions into a gold component with
+    provenance, and register it as a `v3` corpus component so `fit-v2` picks it
+    up. Scoping a round without a round marker or a review.py change: export
+    every decision whose ordered pair is NOT already in the gold corpus, stamped
+    with `review_round`. Queue pairs excluded gold at selection time, so new
+    review decisions are genuinely new by construction. Idempotent — re-running
+    a round rewrites its file with the same content."""
+    import json as _json
+    from stevie_platform import db
+    from stevie_platform.canonical.candidates import order_pair
+    from stevie_platform.canonical.recall import GOLD_DIR, MANIFEST, load_corpus
+
+    # Pairs already labeled anywhere in the widest existing corpus.
+    gold, _v, _m = load_corpus("v2")
+    known = {order_pair(g["key_a"], 0, g["key_b"], 0)[::2] for g in gold}  # (lk, rk)
+
+    p = await db.pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select winner_key, loser_key, decision, reviewed_by from organization_merge_decision "
+            "where decision in ('merge','distinct')")
+        decisions = await cur.fetchall()
+
+    rows, skipped_known = [], 0
+    for d in decisions:
+        lk, _, rk, _ = order_pair(d["winner_key"], 0, d["loser_key"], 0)
+        if (lk, rk) in known:
+            skipped_known += 1
+            continue
+        rows.append({"key_a": lk, "key_b": rk, "label": d["decision"],
+                     "source": source, "review_round": review_round,
+                     "labeled_by": d.get("reviewed_by")})
+    rows.sort(key=lambda r: (r["key_a"], r["key_b"]))
+
+    out = GOLD_DIR / (out_path or f"active_round_{review_round}.jsonl")
+    with out.open("w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(_json.dumps(r, ensure_ascii=False) + "\n")
+
+    # Register the component under corpus v3 (idempotent).
+    manifest = _json.loads(MANIFEST.read_text(encoding="utf-8"))
+    comps = manifest["versions"]["v3"]["components"]
+    if not any(c["file"] == out.name for c in comps):
+        comps.append({"file": out.name,
+                      "description": f"Active-learning round {review_round} ({source}); provenance-tagged."})
+        MANIFEST.write_text(_json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    from collections import Counter
+    by_label = dict(Counter(r["label"] for r in rows))
+    print("\n" + "=" * 60)
+    print(f" EXPORT LABELS  -  round {review_round}  (source={source})")
+    print("=" * 60)
+    print(f"  new labels exported     {len(rows):>6}   {by_label}")
+    print(f"  skipped (already gold)  {skipped_known:>6}")
+    print(f"  file -> {out}")
+    print(f"  registered under corpus v3")
+    print("=" * 60 + "\n")
+    return {"review_round": review_round, "exported": len(rows), "by_label": by_label,
+            "skipped_known": skipped_known, "out_path": str(out)}

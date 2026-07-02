@@ -132,6 +132,10 @@ async def _main(argv: list[str]) -> int:
     fv.add_argument("--model-version", default="v2", help="v2 model version tag (default: v2)")
     fv.add_argument("--corpus", default="v3", help="training corpus version (default: v3)")
     fv.add_argument("--no-persist", action="store_true", help="dry run: fit + A/B report, don't write artifact/registry (avoids freezing)")
+    el = sub.add_parser("export-labels", help="M6: export reviewed decisions to a gold round + register under corpus v3")
+    el.add_argument("--round", type=int, required=True, dest="review_round", help="active-learning round number (>=1)")
+    el.add_argument("--source", default="active_learning", help="provenance source tag (default: active_learning)")
+    el.add_argument("--out", default=None, help="output filename under the gold dir (default: active_round_<round>.jsonl)")
     sm = sub.add_parser("sample", help="M6: emit the active-learning review queue (uncertainty-ranked)")
     sm.add_argument("--model-version", default="v1.2", help="model whose predictions to rank (default: v1.2, the production model)")
     sm.add_argument("--limit", type=int, default=100, help="queue size (default: 100)")
@@ -237,6 +241,10 @@ async def _main(argv: list[str]) -> int:
             from stevie_platform.canonical.scorer_v2 import run_fit_v2
             await run_fit_v2(model_version=args.model_version, corpus=args.corpus,
                              persist=not args.no_persist)
+        elif args.cmd == "export-labels":
+            from stevie_platform.canonical.active_learning import run_export_labels
+            await run_export_labels(review_round=args.review_round, source=args.source,
+                                    out_path=args.out)
         elif args.cmd == "sample":
             from stevie_platform.canonical.active_learning import run_sample
             await run_sample(model_version=args.model_version, limit=args.limit,
