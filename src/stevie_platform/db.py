@@ -166,6 +166,119 @@ async def iter_raw_detail_pages(batch: int = 500):
                     yield r["id"], r["node_id"], gzip.decompress(r["html"]).decode("utf-8", "replace")
 
 
+# --- blog (Phase 1 close-out: blog corpus + graph edges) --------------------
+async def blog_archived_urls() -> set[str]:
+    """URLs already archived as blog pages — lets fetch run incrementally."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select distinct url from raw_pages where page_type = 'blog'")
+        return {r["url"] for r in await cur.fetchall()}
+
+
+async def iter_raw_blog_pages(batch: int = 200):
+    """Yield (raw_page_id, url, decompressed_html) for every archived blog page —
+    the input to blog extraction."""
+    p = await pool()
+    async with p.connection() as conn:
+        async with conn.cursor(name="raw_blog_cursor") as cur:
+            await cur.execute(
+                "select id, url, html from raw_pages where page_type = 'blog'")
+            while rows := await cur.fetchmany(batch):
+                for r in rows:
+                    yield r["id"], r["url"], gzip.decompress(r["html"]).decode("utf-8", "replace")
+
+
+async def upsert_blog_post(*, url: str, slug: str, title: str | None,
+                           author: str | None, published_at, lang: str | None,
+                           clean_text: str, raw_page_id: int | None,
+                           crawl_run_id: uuid.UUID) -> int:
+    """Insert/refresh one blog post, keyed on the stable url. Returns its id."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            """insert into blog_posts
+                 (url, slug, title, author, published_at, lang, clean_text,
+                  raw_page_id, crawl_run_id, fetched_at)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+               on conflict (url) do update set
+                 slug=excluded.slug, title=excluded.title, author=excluded.author,
+                 published_at=excluded.published_at, lang=excluded.lang,
+                 clean_text=excluded.clean_text, raw_page_id=excluded.raw_page_id,
+                 crawl_run_id=excluded.crawl_run_id, fetched_at=now()
+               returning id""",
+            (url, slug, title, author, published_at, lang, clean_text,
+             raw_page_id, str(crawl_run_id)))
+        return (await cur.fetchone())["id"]
+
+
+async def blog_language_counts() -> list[dict]:
+    """Post count per detected language (for `blog --report`)."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select coalesce(lang,'?') as lang, count(*) as n from blog_posts "
+            "group by lang order by n desc")
+        return list(await cur.fetchall())
+
+
+async def blog_link_sources() -> tuple[list, list, list, list]:
+    """Canonical entities the linker resolves mentions against + editions."""
+    p = await pool()
+    async with p.connection() as conn:
+        async def rows(q: str) -> list:
+            cur = await conn.execute(q)
+            return list(await cur.fetchall())
+        programs = await rows("select id, slug, name from programs")
+        categories = await rows("select id, slug, name from category_definitions")
+        organizations = await rows("select id, slug, name from organizations")
+        editions = await rows("select program_id, year, slug from program_editions")
+    return programs, categories, organizations, editions
+
+
+async def all_blog_posts() -> list[dict]:
+    """Every stored (English) post — small corpus, load in one shot."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute("select id, title, clean_text from blog_posts")
+        return list(await cur.fetchall())
+
+
+async def clear_blog_entity_links() -> None:
+    """Truncate-and-rebuild: the linker is regenerable from blog_posts."""
+    p = await pool()
+    async with p.connection() as conn:
+        await conn.execute("truncate blog_entity_links restart identity")
+
+
+async def insert_blog_entity_links(blog_id: int, edges: list[dict]) -> int:
+    """Write a post's edges. Reference-only edges are already resolved upstream."""
+    if not edges:
+        return 0
+    p = await pool()
+    async with p.connection() as conn:
+        for e in edges:
+            await conn.execute(
+                """insert into blog_entity_links
+                     (blog_id, entity_type, entity_slug, entity_id, confidence,
+                      extraction_method, mention_text, year)
+                   values (%s,%s,%s,%s,%s,'exact-alias',%s,%s)
+                   on conflict (blog_id, entity_type, entity_slug) do nothing""",
+                (blog_id, e["entity_type"], e["entity_slug"], e["entity_id"],
+                 e["confidence"], e["mention_text"], e["year"]))
+    return len(edges)
+
+
+async def blog_link_counts() -> list[dict]:
+    """Edge count per entity_type (for `blog --report`)."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select entity_type, count(*) n from blog_entity_links "
+            "group by entity_type order by n desc")
+        return list(await cur.fetchall())
+
+
 # --- harvest_state ----------------------------------------------------------
 async def get_done_harvest_pages() -> set[int]:
     """Listing pages already fully harvested — skipped on resume."""

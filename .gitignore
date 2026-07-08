@@ -29,3 +29,6 @@ artifacts/
 !artifacts/calibration/
 !artifacts/calibration/*.json
 artifacts/models/
+
+# Bulk DB exports (regenerable, large; not source)
+exports/

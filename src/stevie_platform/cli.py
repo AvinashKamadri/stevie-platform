@@ -96,6 +96,10 @@ async def _main(argv: list[str]) -> int:
     h.add_argument("--resume", action="store_true", help="re-run to retry failed/pending pages (default behavior)")
     f = sub.add_parser("fetch")
     f.add_argument("--force", action="store_true", help="skip the harvest-complete gate")
+    bl = sub.add_parser("blog", help="Phase 1: blog corpus -> knowledge-graph edges")
+    bl.add_argument("stage", choices=["discover", "fetch", "extract", "link", "report"])
+    bl.add_argument("--limit", type=int, default=None,
+                    help="cap posts fetched this run (politeness / smoke test)")
     pp = sub.add_parser("parse")
     pp.add_argument("--fresh", action="store_true")
     pp.add_argument("--force", action="store_true", help="skip the fetch-complete gate")
@@ -185,6 +189,21 @@ async def _main(argv: list[str]) -> int:
                 await db.finish_crawl_run(run_id)
             finally:
                 await lock.close()
+        elif args.cmd == "blog":
+            from stevie_platform.acquisition import blog
+            if args.stage == "discover":
+                await blog.discover()
+            elif args.stage == "report":
+                await blog.report()
+            else:
+                run_id = await db.start_crawl_run(f"blog_{args.stage}", git_commit=_git_commit())
+                if args.stage == "fetch":
+                    await blog.fetch(run_id, limit=args.limit)
+                elif args.stage == "extract":
+                    await blog.extract(run_id)
+                elif args.stage == "link":
+                    await blog.link(run_id)
+                await db.finish_crawl_run(run_id)
         elif args.cmd in ("parse", "reparse"):
             from stevie_platform.parsing.run import parse_all
             from stevie_platform.parsing.parse import PARSER_VERSION
