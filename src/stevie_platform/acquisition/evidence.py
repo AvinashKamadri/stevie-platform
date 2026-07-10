@@ -172,6 +172,7 @@ def get_discovery() -> object:
 # --- Extractor seam (Claude via the official SDK; Null needs no key) ----------
 class NullExtractor:
     name = "none"
+    model = None
 
     async def extract(self, doc: Document, subject: dict) -> dict:
         return {}
@@ -192,10 +193,12 @@ class ClaudeExtractor:
     the environment (never from code). Structured output via messages.parse."""
     name = "claude"
 
-    def __init__(self, model: str = "claude-opus-4-8"):
+    def __init__(self, model: str | None = None):
         import anthropic
         self._client = anthropic.AsyncAnthropic()   # env-resolved credentials
-        self._model = model
+        # Configurable via STEVIE_EVIDENCE_MODEL (default opus). Extraction is a
+        # structured-parse task — Sonnet/Haiku cut cost ~3-5x at scale.
+        self.model = model or os.environ.get("STEVIE_EVIDENCE_MODEL") or "claude-opus-4-8"
 
     async def extract(self, doc: Document, subject: dict) -> dict:
         from pydantic import BaseModel
@@ -211,7 +214,7 @@ class ClaudeExtractor:
             name=subject["name"], stype=subject["subject_type"],
             text=doc.text[:_MAX_EXTRACT_CHARS])
         resp = await self._client.messages.parse(
-            model=self._model, max_tokens=2048,
+            model=self.model, max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
             output_format=EvidenceExtraction,
         )
@@ -276,6 +279,8 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                     subject=s, url=doc.url, source_type=hit.source_type,
                     content=doc.text, extracted=extracted,
                     discovery=discovery.name, extraction=extractor.name,
+                    extractor_model=getattr(extractor, "model", None),
+                    extractor_version=EXTRACT_SCHEMA_VERSION,
                     raw_page_id=raw_id, crawl_run_id=crawl_run_id)
                 stored += 1
     print(f"[evidence] discovered={discovered} stored={stored}")

@@ -381,21 +381,25 @@ async def insert_winner_evidence(*, subject: dict, url: str, source_type: str | 
                                  content: str, extracted: dict, discovery: str,
                                  extraction: str, raw_page_id: int | None,
                                  crawl_run_id: uuid.UUID | None,
+                                 extractor_model: str | None = None,
+                                 extractor_version: str | None = None,
                                  confidence: float = 0.4) -> None:
-    """Store one evidence doc. External prior (0.4) below blog/winner trust."""
+    """Store one evidence doc. External prior (0.4) below blog/winner trust.
+    Records extraction provenance (model/version/extracted_at) for re-extraction."""
     p = await pool()
     async with p.connection() as conn:
         await conn.execute(
             """insert into winner_evidence
                  (subject_type, subject_slug, subject_id, source_url, source_type,
                   content, extracted, confidence, discovery_provider,
-                  extraction_method, raw_page_id, crawl_run_id)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                  extraction_method, extractor_model, extractor_version,
+                  extracted_at, raw_page_id, crawl_run_id)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now(),%s,%s)
                on conflict (subject_type, subject_slug, source_url) do nothing""",
             (subject["subject_type"], subject["subject_slug"], subject.get("subject_id"),
              url, source_type, content, json.dumps(extracted or {}), confidence,
-             discovery, extraction, raw_page_id,
-             str(crawl_run_id) if crawl_run_id else None))
+             discovery, extraction, extractor_model, extractor_version,
+             raw_page_id, str(crawl_run_id) if crawl_run_id else None))
 
 
 async def evidence_report() -> dict:
