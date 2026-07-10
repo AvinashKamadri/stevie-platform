@@ -102,6 +102,10 @@ async def _main(argv: list[str]) -> int:
                     help="cap posts fetched this run (politeness / smoke test)")
     pl = sub.add_parser("people", help="milestone B: extract+resolve individuals from individual-award nominations")
     pl.add_argument("--report", action="store_true", help="print counts + top people (don't rebuild)")
+    ev = sub.add_parser("evidence", help="crawler milestone: external Evidence Layer (pluggable discovery/fetch/extract)")
+    ev.add_argument("stage", choices=["subjects", "build", "report"])
+    ev.add_argument("--orgs", type=int, default=20, help="number of top orgs to include (default 20)")
+    ev.add_argument("--people", type=int, default=20, help="number of top people to include (default 20)")
     pp = sub.add_parser("parse")
     pp.add_argument("--fresh", action="store_true")
     pp.add_argument("--force", action="store_true", help="skip the fetch-complete gate")
@@ -216,6 +220,19 @@ async def _main(argv: list[str]) -> int:
                 from stevie_platform.canonical import people_pipeline
                 run_id = await db.start_crawl_run("people", git_commit=_git_commit())
                 await people_pipeline.build(run_id)
+                await db.finish_crawl_run(run_id)
+        elif args.cmd == "evidence":
+            from stevie_platform.acquisition import evidence
+            if args.stage == "subjects":
+                await evidence.subjects_report(args.orgs, args.people)
+            elif args.stage == "report":
+                rep = await db.evidence_report()
+                print(f"[evidence] {rep['docs']} evidence docs")
+                for r in rep["by_type"]:
+                    print(f"    {r['subject_type']:12} {r['n']}")
+            else:  # build
+                run_id = await db.start_crawl_run("evidence", git_commit=_git_commit())
+                await evidence.build(run_id, n_org=args.orgs, n_person=args.people)
                 await db.finish_crawl_run(run_id)
         elif args.cmd in ("parse", "reparse"):
             from stevie_platform.parsing.run import parse_all

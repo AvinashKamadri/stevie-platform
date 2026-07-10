@@ -348,6 +348,66 @@ async def person_layer_report() -> dict:
         return {"people": np, "links": nl, "top": list(await cur.fetchall())}
 
 
+# --- evidence layer (crawler milestone) -------------------------------------
+async def evidence_subjects(n_org: int = 20, n_person: int = 20) -> tuple[list, list]:
+    """Curated notable subjects: top orgs + top people by recognition count."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            """select o.id, o.slug, o.name, count(distinct r.id) n
+               from organizations o
+               join parties pa on pa.organization_id = o.id
+               join recognitions r on r.recipient_party_id = pa.id
+               group by o.id, o.slug, o.name order by n desc limit %s""", (n_org,))
+        orgs = list(await cur.fetchall())
+        cur = await conn.execute(
+            """select pe.id, pe.slug, pe.name, count(*) n
+               from recognition_people rp join people pe on pe.id = rp.person_id
+               group by pe.id, pe.slug, pe.name order by n desc limit %s""", (n_person,))
+        people = list(await cur.fetchall())
+    return orgs, people
+
+
+async def evidence_exists(subject_type: str, subject_slug: str, url: str) -> bool:
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select 1 from winner_evidence where subject_type=%s and subject_slug=%s "
+            "and source_url=%s limit 1", (subject_type, subject_slug, url))
+        return (await cur.fetchone()) is not None
+
+
+async def insert_winner_evidence(*, subject: dict, url: str, source_type: str | None,
+                                 content: str, extracted: dict, discovery: str,
+                                 extraction: str, raw_page_id: int | None,
+                                 crawl_run_id: uuid.UUID | None,
+                                 confidence: float = 0.4) -> None:
+    """Store one evidence doc. External prior (0.4) below blog/winner trust."""
+    p = await pool()
+    async with p.connection() as conn:
+        await conn.execute(
+            """insert into winner_evidence
+                 (subject_type, subject_slug, subject_id, source_url, source_type,
+                  content, extracted, confidence, discovery_provider,
+                  extraction_method, raw_page_id, crawl_run_id)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               on conflict (subject_type, subject_slug, source_url) do nothing""",
+            (subject["subject_type"], subject["subject_slug"], subject.get("subject_id"),
+             url, source_type, content, json.dumps(extracted or {}), confidence,
+             discovery, extraction, raw_page_id,
+             str(crawl_run_id) if crawl_run_id else None))
+
+
+async def evidence_report() -> dict:
+    p = await pool()
+    async with p.connection() as conn:
+        n = (await (await conn.execute("select count(*) n from winner_evidence")).fetchone())["n"]
+        cur = await conn.execute(
+            "select subject_type, count(*) n from winner_evidence "
+            "group by subject_type order by n desc")
+        return {"docs": n, "by_type": list(await cur.fetchall())}
+
+
 # --- harvest_state ----------------------------------------------------------
 async def get_done_harvest_pages() -> set[int]:
     """Listing pages already fully harvested — skipped on resume."""
