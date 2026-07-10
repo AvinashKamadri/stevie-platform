@@ -30,6 +30,15 @@ from stevie_platform.config import HTTP_TIMEOUT_S, USER_AGENTS
 
 EXTRACT_SCHEMA_VERSION = "1.0.0"
 
+# Evidence pages are arbitrary public news/company sites that block non-browser
+# clients. A realistic browser header set (not the Stevie crawler UA) cuts 403s.
+_BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 
 @dataclass
 class Hit:
@@ -75,7 +84,8 @@ class HttpxFetcher:
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self):
-        self._client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_S, follow_redirects=True)
+        self._client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_S, follow_redirects=True,
+                                         headers=_BROWSER_HEADERS)
         return self
 
     async def __aexit__(self, *exc):
@@ -84,7 +94,7 @@ class HttpxFetcher:
     async def fetch(self, url: str) -> Document | None:
         await self._rate.wait()
         try:
-            r = await self._client.get(url, headers={"User-Agent": random.choice(USER_AGENTS)})
+            r = await self._client.get(url)
         except Exception:  # noqa: BLE001 — one bad URL must not kill the run
             self._rate.on_block()
             return None
@@ -115,15 +125,48 @@ class StaticDiscovery:
                 for u in self.url_map.get(subject["subject_slug"], [])]
 
 
+class TavilyDiscovery:
+    """Discovery via the Tavily Search API (official-API, ToS-safe). Reads the
+    key from TAVILY_API_KEY or CRAWL_KEY. One query per subject; returns Hits."""
+    name = "tavily"
+
+    def __init__(self, api_key: str, max_results: int = 8):
+        self._key = api_key
+        self._max = max_results
+
+    async def discover(self, subject: dict) -> list[Hit]:
+        # Plain keyword query. Boolean OR operators make Tavily return /goto
+        # redirect URLs instead of real page URLs.
+        query = f'{subject["name"]} Stevie Awards achievements customer success'
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Bearer-only auth: sending api_key in the body too makes Tavily
+            # return /goto redirect URLs instead of the real page URLs.
+            r = await client.post(
+                "https://api.tavily.com/search",
+                headers={"Authorization": f"Bearer {self._key}"},
+                json={"query": query, "max_results": self._max,
+                      "search_depth": "basic"})
+            r.raise_for_status()
+            results = r.json().get("results", [])
+        return [Hit(url=x["url"], title=x.get("title"), source_type="tavily")
+                for x in results if x.get("url")]
+
+
 def get_discovery() -> object:
     prov = os.environ.get("STEVIE_EVIDENCE_DISCOVERY", "null").lower()
     if prov == "null":
         return NullDiscovery()
     if prov == "static":
         return StaticDiscovery()  # caller injects url_map
+    if prov == "tavily":
+        key = os.environ.get("TAVILY_API_KEY") or os.environ.get("CRAWL_KEY")
+        if not key:
+            raise RuntimeError("STEVIE_EVIDENCE_DISCOVERY=tavily but no "
+                               "TAVILY_API_KEY / CRAWL_KEY in the environment")
+        return TavilyDiscovery(key)
     raise NotImplementedError(
         f"discovery provider '{prov}' needs a search-API key + adapter "
-        "(google_cse / bing / serpapi / tavily); not wired yet")
+        "(google_cse / bing / serpapi); not wired yet")
 
 
 # --- Extractor seam (Claude via the official SDK; Null needs no key) ----------
