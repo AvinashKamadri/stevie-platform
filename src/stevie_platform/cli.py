@@ -100,6 +100,8 @@ async def _main(argv: list[str]) -> int:
     bl.add_argument("stage", choices=["discover", "fetch", "extract", "link", "report"])
     bl.add_argument("--limit", type=int, default=None,
                     help="cap posts fetched this run (politeness / smoke test)")
+    pl = sub.add_parser("people", help="milestone B: extract+resolve individuals from individual-award nominations")
+    pl.add_argument("--report", action="store_true", help="print counts + top people (don't rebuild)")
     pp = sub.add_parser("parse")
     pp.add_argument("--fresh", action="store_true")
     pp.add_argument("--force", action="store_true", help="skip the fetch-complete gate")
@@ -203,6 +205,17 @@ async def _main(argv: list[str]) -> int:
                     await blog.extract(run_id)
                 elif args.stage == "link":
                     await blog.link(run_id)
+                await db.finish_crawl_run(run_id)
+        elif args.cmd == "people":
+            if args.report:
+                rep = await db.person_layer_report()
+                print(f"[people] {rep['people']} people, {rep['links']} links")
+                for r in rep["top"]:
+                    print(f"    {r['n']:3}  {r['name']}  @ {r['org'] or ''}")
+            else:
+                from stevie_platform.canonical import people_pipeline
+                run_id = await db.start_crawl_run("people", git_commit=_git_commit())
+                await people_pipeline.build(run_id)
                 await db.finish_crawl_run(run_id)
         elif args.cmd in ("parse", "reparse"):
             from stevie_platform.parsing.run import parse_all

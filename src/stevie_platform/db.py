@@ -279,6 +279,75 @@ async def blog_link_counts() -> list[dict]:
         return list(await cur.fetchall())
 
 
+# --- person layer (milestone B) ---------------------------------------------
+async def people_source_recognitions() -> list[dict]:
+    """Individual-award recognitions + employer org — input to person extraction."""
+    from stevie_platform.canonical.people_extract import INDIVIDUAL_AWARD_RX
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            """select r.id as rec_id, r.nomination_title, pa.organization_id as org_id
+               from recognitions r
+               join category_definitions cd on cd.id = r.category_definition_id
+               left join parties pa on pa.id = r.recipient_party_id
+               where cd.name ~* %s and r.nomination_title is not null
+                 and length(trim(r.nomination_title)) > 0""",
+            (INDIVIDUAL_AWARD_RX,))
+        return list(await cur.fetchall())
+
+
+async def clear_person_layer() -> None:
+    """Regenerable: drop edges then people (people has no other referrers yet)."""
+    p = await pool()
+    async with p.connection() as conn:
+        await conn.execute("delete from recognition_people")
+        await conn.execute("delete from people")
+
+
+async def insert_people(people: list[dict]) -> dict:
+    """Bulk-insert people; return {norm_key: id}."""
+    if not people:
+        return {}
+    p = await pool()
+    async with p.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.executemany(
+                "insert into people (norm_key, slug, name, org_id, title) "
+                "values (%s,%s,%s,%s,%s)",
+                [(pe["norm_key"], pe["slug"], pe["name"], pe["org_id"], pe["title"])
+                 for pe in people])
+        cur = await conn.execute("select id, norm_key from people")
+        return {r["norm_key"]: r["id"] for r in await cur.fetchall()}
+
+
+async def insert_recognition_people(links: list[tuple]) -> int:
+    """links: (recognition_id, person_id, extracted_name, title, confidence)."""
+    if not links:
+        return 0
+    p = await pool()
+    async with p.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.executemany(
+                "insert into recognition_people "
+                "(recognition_id, person_id, extracted_name, title, confidence) "
+                "values (%s,%s,%s,%s,%s) on conflict (recognition_id, person_id) do nothing",
+                links)
+    return len(links)
+
+
+async def person_layer_report() -> dict:
+    p = await pool()
+    async with p.connection() as conn:
+        np = (await (await conn.execute("select count(*) n from people")).fetchone())["n"]
+        nl = (await (await conn.execute("select count(*) n from recognition_people")).fetchone())["n"]
+        cur = await conn.execute(
+            "select p.name, o.name org, count(*) n from recognition_people rp "
+            "join people p on p.id = rp.person_id "
+            "left join organizations o on o.id = p.org_id "
+            "group by p.id, p.name, o.name order by n desc limit 12")
+        return {"people": np, "links": nl, "top": list(await cur.fetchall())}
+
+
 # --- harvest_state ----------------------------------------------------------
 async def get_done_harvest_pages() -> set[int]:
     """Listing pages already fully harvested — skipped on resume."""
