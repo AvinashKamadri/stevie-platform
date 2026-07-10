@@ -9,7 +9,7 @@ import pytest
 
 from stevie_platform.acquisition.evidence import (
     NullDiscovery, NullExtractor, StaticDiscovery, get_discovery, get_extractor,
-    html_to_text, rank_subjects,
+    html_to_text, is_junk_url, rank_subjects,
 )
 
 
@@ -50,6 +50,19 @@ def test_extractor_claude_requires_key(monkeypatch):
     monkeypatch.delenv("API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         get_extractor()
+
+
+def test_is_junk_url():
+    # listing / nav / auth pages are not evidence
+    assert is_junk_url("https://blog.stevieawards.com/blog/topic/marketing")
+    assert is_junk_url("https://site.com/category/news")
+    assert is_junk_url("https://site.com/blog/archive/2025/12")
+    assert is_junk_url("https://site.com/login")
+    assert is_junk_url("https://site.com/author/jane-doe")
+    # real article pages pass
+    assert not is_junk_url("https://en.wikipedia.org/wiki/IBM")
+    assert not is_junk_url("https://www.ibm.com/new/announcements/some-real-story")
+    assert not is_junk_url("https://mobile.stevieawards.com/sales/ibm-customer-service-success")
 
 
 def test_html_to_text_strips_boilerplate():

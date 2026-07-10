@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import os
 import re
-import random
+import hashlib
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 
 from stevie_platform import db
 from stevie_platform.acquisition.fetch import AdaptiveRate
-from stevie_platform.config import HTTP_TIMEOUT_S, USER_AGENTS
+from stevie_platform.config import HTTP_TIMEOUT_S
 
 EXTRACT_SCHEMA_VERSION = "1.0.0"
 
@@ -248,6 +248,18 @@ def rank_subjects(org_rows: list[dict], person_rows: list[dict]) -> list[dict]:
     return subs
 
 
+# --- pre-extraction filtering (don't pay the LLM for junk pages) --------------
+_MIN_CONTENT_CHARS = 500
+_JUNK_URL_RE = re.compile(
+    r"/(tag|tags|category|categories|topic|topics|archive|archives|search|login|"
+    r"sign-?in|register|subscribe|cart|account|author|page)(/|$|\?|=)", re.I)
+
+
+def is_junk_url(url: str) -> bool:
+    """Cheap pre-fetch filter: listing/nav/auth pages aren't evidence."""
+    return bool(_JUNK_URL_RE.search(url))
+
+
 # --- orchestration ------------------------------------------------------------
 async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                 url_map: dict | None = None) -> dict:
@@ -262,19 +274,35 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
           f"fetcher=httpx extractor={extractor.name}")
 
     discovered = stored = 0
+    skipped = {"junk_url": 0, "already_stored": 0, "fetch_fail": 0,
+               "low_text": 0, "dup_content": 0}
+    seen_hashes: set[str] = set()
     async with HttpxFetcher() as fetcher:
         for s in subjects:
             for hit in await discovery.discover(s):
                 discovered += 1
+                if is_junk_url(hit.url):                       # #1/tiering: nav/listing pages
+                    skipped["junk_url"] += 1
+                    continue
                 if await db.evidence_exists(s["subject_type"], s["subject_slug"], hit.url):
+                    skipped["already_stored"] += 1              # #6: never re-extract stored
                     continue
                 doc = await fetcher.fetch(hit.url)
                 if not doc:
+                    skipped["fetch_fail"] += 1
                     continue
+                if len(doc.text) < _MIN_CONTENT_CHARS:          # #4: skip near-empty pages
+                    skipped["low_text"] += 1
+                    continue
+                digest = hashlib.sha256(doc.text.encode("utf-8")).hexdigest()
+                if digest in seen_hashes:                       # #5: syndicated/mirror dup
+                    skipped["dup_content"] += 1
+                    continue
+                seen_hashes.add(digest)
                 raw_id = await db.save_raw_page(
                     url=doc.url, page_type="evidence", html=doc.html,
                     http_status=doc.status, crawl_run_id=crawl_run_id)
-                extracted = await extractor.extract(doc, s)
+                extracted = await extractor.extract(doc, s)     # only the survivors hit the LLM
                 await db.insert_winner_evidence(
                     subject=s, url=doc.url, source_type=hit.source_type,
                     content=doc.text, extracted=extracted,
@@ -283,8 +311,10 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                     extractor_version=EXTRACT_SCHEMA_VERSION,
                     raw_page_id=raw_id, crawl_run_id=crawl_run_id)
                 stored += 1
-    print(f"[evidence] discovered={discovered} stored={stored}")
-    return {"subjects": len(subjects), "discovered": discovered, "stored": stored}
+    print(f"[evidence] discovered={discovered} extracted={stored} skipped={skipped} "
+          f"(extractor={extractor.name}/{getattr(extractor, 'model', None)})")
+    return {"subjects": len(subjects), "discovered": discovered,
+            "extracted": stored, "skipped": skipped}
 
 
 async def subjects_report(n_org: int = 20, n_person: int = 20) -> None:
