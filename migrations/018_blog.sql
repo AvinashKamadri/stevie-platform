@@ -15,18 +15,13 @@
 -- Additive & re-runnable (stevie migrate re-applies every *.sql in order):
 -- `if not exists` on tables/indexes; the page_type CHECK is drop-if-exists+add.
 
--- Blog HTML is archived in raw_pages like every other fetched page. Extend the
--- page_type domain to include 'blog' (the constraint is Postgres-auto-named
--- raw_pages_page_type_check for the inline column check in 001_init.sql).
-alter table raw_pages drop constraint if exists raw_pages_page_type_check;
-alter table raw_pages add  constraint raw_pages_page_type_check
-    check (page_type in ('listing', 'detail', 'blog'));
-
--- Blog acquisition stages are their own provenance kinds in crawl_runs.
-alter table crawl_runs drop constraint if exists crawl_runs_kind_check;
-alter table crawl_runs add  constraint crawl_runs_kind_check
-    check (kind in ('harvest', 'fetch', 'parse', 'canonicalize',
-                    'blog_fetch', 'blog_extract', 'blog_link'));
+-- NOTE: raw_pages_page_type_check AND crawl_runs_kind_check are each owned by the
+-- LATEST migration that adds a value (currently 021), which re-declares the full
+-- list. Earlier migrations must NOT also ALTER them: `stevie migrate` re-runs
+-- every file in order, so a narrower re-add here runs BEFORE the owner and
+-- rejects rows of a later value (a 'blog'/'evidence' page, a 'people'/'evidence'
+-- crawl_run). 001 sets the initial inline CHECKs via CREATE TABLE IF NOT EXISTS,
+-- which is skipped on re-run; the explicit ALTERs below were the re-run hazard.
 
 -- blog_posts — the FIRST base table not derived from parsed_records. One row per
 -- extracted post. url/slug are the STABLE natural keys (external refs never use

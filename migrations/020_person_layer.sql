@@ -22,11 +22,11 @@ create table if not exists recognition_people (
 create index if not exists recognition_people_person_idx on recognition_people (person_id);
 create index if not exists recognition_people_recog_idx  on recognition_people (recognition_id);
 
--- person extraction is its own provenance kind.
-alter table crawl_runs drop constraint if exists crawl_runs_kind_check;
-alter table crawl_runs add  constraint crawl_runs_kind_check
-    check (kind in ('harvest', 'fetch', 'parse', 'canonicalize',
-                    'blog_fetch', 'blog_extract', 'blog_link', 'people'));
+-- NOTE: the 'people' crawl_runs kind is declared by the single owner of
+-- crawl_runs_kind_check -- the latest kind-adding migration (021, full list).
+-- 020 must NOT ALTER the constraint itself (see the note in 018): migrate
+-- re-runs every file, and a people-only re-add here would run before 021 and
+-- reject an existing 'evidence' crawl_run.
 
 comment on table recognition_people is
     'Additive person<->recognition edges (milestone B). People recovered from '
