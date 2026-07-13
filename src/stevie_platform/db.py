@@ -391,6 +391,36 @@ async def evidence_done_subjects() -> set[tuple[str, str]]:
         return {(r["subject_type"], r["subject_slug"]) for r in await cur.fetchall()}
 
 
+async def evidence_summary() -> dict:
+    """Corpus-wide benchmark stats: totals, density, confidence, and the tier /
+    category / sentiment / model distributions. Basis for the summary report."""
+    p = await pool()
+    out: dict = {}
+    async with p.connection() as conn:
+        async def rows(q):
+            return await (await conn.execute(q)).fetchall()
+
+        r = (await rows("select count(*) n, count(distinct subject_slug) s, "
+                        "avg(confidence)::numeric(4,3) c from winner_evidence"))[0]
+        out["total"] = r["n"]; out["subjects"] = r["s"]; out["avg_confidence"] = r["c"]
+        out["by_type"] = {x["subject_type"]: {"rows": x["rows"], "subjects": x["subjects"]}
+            for x in await rows("select subject_type, count(*) rows, "
+                "count(distinct subject_slug) subjects from winner_evidence group by 1")}
+        out["by_tier"] = {(x["source_tier"] or "?"): x["n"] for x in await rows(
+            "select source_tier, count(*) n from winner_evidence "
+            "where source_tier is not null group by 1 order by 1")}
+        out["by_category"] = {x["cat"]: x["n"] for x in await rows(
+            "select cat, count(*) n from winner_evidence, "
+            "lateral jsonb_array_elements_text(coalesce(extracted->'categories','[]'::jsonb)) cat "
+            "group by 1 order by 2 desc")}
+        out["by_sentiment"] = {(x["s"] or "?"): x["n"] for x in await rows(
+            "select extracted->>'sentiment' s, count(*) n from winner_evidence "
+            "where extracted ? 'sentiment' group by 1 order by 2 desc")}
+        out["by_model"] = {(x["m"] or "?"): x["n"] for x in await rows(
+            "select extractor_model m, count(*) n from winner_evidence group by 1 order by 2 desc")}
+    return out
+
+
 async def evidence_counts_by_subject() -> dict[tuple[str, str], dict]:
     """Per (subject_type, subject_slug): accepted evidence count + tier A/B count.
     Feeds the coverage report (density vs target, authority mix)."""

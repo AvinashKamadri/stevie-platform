@@ -602,14 +602,13 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
     if hasattr(extractor, "detect_rate_limit"):
         detected = await extractor.detect_rate_limit()
 
-    # #3 process several subjects concurrently to hide fetch/search latency; the
-    # shared _TokenBudget still bounds total extraction to the per-minute cap.
-    conc = max(1, int(os.environ.get("STEVIE_EVIDENCE_CONCURRENCY") or 4))
+    # #3 URL-level concurrency. With 12+ queries/subject the per-subject sequential
+    # fetch+extract was the bottleneck, so discover all pending subjects, flatten to
+    # (subject, hit) work items, then process URLs through ONE global pool -- keeps
+    # `conc` URLs in flight regardless of how they're distributed across subjects.
+    conc = max(1, int(os.environ.get("STEVIE_EVIDENCE_CONCURRENCY") or 8))
+    disc_conc = max(1, int(os.environ.get("STEVIE_EVIDENCE_DISCOVERY_CONCURRENCY") or 8))
     cap = getattr(getattr(extractor, "_budget", None), "cap", None)
-    print(f"[evidence] {len(subjects)} subjects; {len(pending)} pending "
-          f"({len(subjects) - len(pending)} already done); discovery={discovery.name} "
-          f"fetcher=httpx extractor={extractor.name} conc={conc} tpm={cap}"
-          + (f" (detected {detected})" if detected else ""))
 
     name_gate = os.environ.get("STEVIE_EVIDENCE_NAME_GATE", "on").lower() != "off"
     counts = {"discovered": 0, "stored": 0}
@@ -618,71 +617,85 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                "extract_fail": 0, "discover_fail": 0,
                "subject_skip": len(subjects) - len(pending)}
     seen_hashes: set[str] = set()
+
+    # Phase A -- discover all pending subjects concurrently (Tavily is fast).
+    print(f"[evidence] discovering {len(pending)} pending subjects "
+          f"(of {len(subjects)}) ...")
+    disc_sem = asyncio.Semaphore(disc_conc)
+
+    async def _discover(s: dict):
+        async with disc_sem:
+            try:
+                return s, await discovery.discover(s)
+            except Exception as e:        # a flaky search skips the subject, not the crawl
+                skipped["discover_fail"] += 1
+                print(f"[evidence] discover_fail {s['subject_slug']}: "
+                      f"{type(e).__name__}: {e}")
+                return s, []
+
+    discovered = await asyncio.gather(*(_discover(s) for s in pending))
+    work = [(s, hit) for s, hits in discovered for hit in hits]
+    counts["discovered"] = len(work)
+    print(f"[evidence] {len(work)} URLs discovered; extractor={extractor.name} "
+          f"conc={conc} tpm={cap}" + (f" (detected {detected})" if detected else ""))
+
+    # Phase B -- process each (subject, hit) through a global URL-level semaphore.
     sem = asyncio.Semaphore(conc)
 
     async with HttpxFetcher() as fetcher:
-        async def process(s: dict) -> None:
+        async def handle(s: dict, hit: Hit) -> None:
             async with sem:
+                if is_junk_url(hit.url):                        # nav/listing pages
+                    skipped["junk_url"] += 1
+                    return
+                tier = source_tier(hit.url)
+                if tier == "E":                                # social/forums/UGC
+                    skipped["tier_e"] += 1
+                    return
+                if await db.evidence_exists(s["subject_type"], s["subject_slug"], hit.url):
+                    skipped["already_stored"] += 1             # never re-extract stored
+                    return
+                doc = await fetcher.fetch(hit.url)
+                if not doc:
+                    skipped["fetch_fail"] += 1
+                    return
+                if len(doc.text) < _MIN_CONTENT_CHARS:          # near-empty pages
+                    skipped["low_text"] += 1
+                    return
+                digest = hashlib.sha256(doc.text.encode("utf-8")).hexdigest()
+                if digest in seen_hashes:                       # syndicated/mirror dup
+                    skipped["dup_content"] += 1
+                    return
+                seen_hashes.add(digest)
+                if name_gate and not subject_mentioned(         # entity-resolution gate
+                        doc.text, s.get("name", ""), s["subject_type"], url=doc.url):
+                    skipped["no_subject_mention"] += 1          # off-subject/collision page
+                    return
+                raw_id = await db.save_raw_page(
+                    url=doc.url, page_type="evidence", html=doc.html,
+                    http_status=doc.status, crawl_run_id=crawl_run_id)
                 try:
-                    hits = await discovery.discover(s)
-                except Exception as e:        # a flaky search skips the subject, not the crawl
-                    skipped["discover_fail"] += 1
-                    print(f"[evidence] discover_fail {s['subject_slug']}: "
+                    extracted = await extractor.extract(doc, s)  # only survivors hit the LLM
+                except Exception as e:                           # never let one page kill the run
+                    skipped["extract_fail"] += 1
+                    print(f"[evidence] extract_fail {s['subject_slug']} {hit.url}: "
                           f"{type(e).__name__}: {e}")
                     return
-                for hit in hits:
-                    counts["discovered"] += 1
-                    if is_junk_url(hit.url):                    # nav/listing pages
-                        skipped["junk_url"] += 1
-                        continue
-                    tier = source_tier(hit.url)
-                    if tier == "E":                            # social/forums/UGC — don't pay to extract
-                        skipped["tier_e"] += 1
-                        continue
-                    if await db.evidence_exists(s["subject_type"], s["subject_slug"], hit.url):
-                        skipped["already_stored"] += 1          # never re-extract stored
-                        continue
-                    doc = await fetcher.fetch(hit.url)
-                    if not doc:
-                        skipped["fetch_fail"] += 1
-                        continue
-                    if len(doc.text) < _MIN_CONTENT_CHARS:      # skip near-empty pages
-                        skipped["low_text"] += 1
-                        continue
-                    digest = hashlib.sha256(doc.text.encode("utf-8")).hexdigest()
-                    if digest in seen_hashes:                   # syndicated/mirror dup
-                        skipped["dup_content"] += 1
-                        continue
-                    seen_hashes.add(digest)
-                    if name_gate and not subject_mentioned(     # entity-resolution gate
-                            doc.text, s.get("name", ""), s["subject_type"], url=doc.url):
-                        skipped["no_subject_mention"] += 1       # off-subject/collision page
-                        continue
-                    raw_id = await db.save_raw_page(
-                        url=doc.url, page_type="evidence", html=doc.html,
-                        http_status=doc.status, crawl_run_id=crawl_run_id)
-                    try:
-                        extracted = await extractor.extract(doc, s)  # only survivors hit the LLM
-                    except Exception as e:                       # never let one page kill the run
-                        skipped["extract_fail"] += 1
-                        print(f"[evidence] extract_fail {s['subject_slug']} {hit.url}: "
-                              f"{type(e).__name__}: {e}")
-                        continue
-                    await db.insert_winner_evidence(
-                        subject=s, url=doc.url, source_type=hit.source_type,
-                        content=doc.text, extracted=extracted,
-                        discovery=discovery.name, extraction=extractor.name,
-                        extractor_model=getattr(extractor, "model", None),
-                        extractor_version=EXTRACT_SCHEMA_VERSION,
-                        source_tier=tier,
-                        raw_page_id=raw_id, crawl_run_id=crawl_run_id)
-                    counts["stored"] += 1
+                await db.insert_winner_evidence(
+                    subject=s, url=doc.url, source_type=hit.source_type,
+                    content=doc.text, extracted=extracted,
+                    discovery=discovery.name, extraction=extractor.name,
+                    extractor_model=getattr(extractor, "model", None),
+                    extractor_version=EXTRACT_SCHEMA_VERSION, source_tier=tier,
+                    raw_page_id=raw_id, crawl_run_id=crawl_run_id)
+                counts["stored"] += 1
 
-        results = await asyncio.gather(*(process(s) for s in pending),
+        results = await asyncio.gather(*(handle(s, hit) for s, hit in work),
                                        return_exceptions=True)
-    for s, r in zip(pending, results):
-        if isinstance(r, Exception):          # unexpected per-subject failure — log, don't abort
-            print(f"[evidence] subject_error {s['subject_slug']}: {type(r).__name__}: {r}")
+    for (s, hit), r in zip(work, results):
+        if isinstance(r, Exception):          # unexpected per-URL failure -- log, don't abort
+            print(f"[evidence] url_error {s['subject_slug']} {hit.url}: "
+                  f"{type(r).__name__}: {r}")
 
     print(f"[evidence] discovered={counts['discovered']} extracted={counts['stored']} "
           f"skipped={skipped} (extractor={extractor.name}/{getattr(extractor, 'model', None)})")
@@ -710,6 +723,54 @@ def _density_target(subject_type: str, recognitions: int) -> tuple[int, int, str
     if recognitions >= 10:
         return (30, 60, "known exec")
     return (15, 30, "executive")
+
+
+def _distbar(dist: dict, total: int, width: int = 22) -> None:
+    """Print a name / bar / percent distribution, largest first."""
+    for k, n in sorted(dist.items(), key=lambda kv: -kv[1]):
+        pct = 100 * n / total if total else 0
+        bar = "#" * round(pct / 100 * width)
+        print(f"    {str(k)[:18]:18} {bar:<{width}} {pct:4.0f}%  ({n})")
+
+
+async def summary_report() -> None:
+    """Benchmark report for the corpus — the number to compare against as the
+    crawler evolves. Distributions + the most-recent run's acceptance funnel."""
+    s = await db.evidence_summary()
+    total = s["total"]
+    covered = s["subjects"] or 1
+    print("=== Evidence Summary ===")
+    print(f"Subjects with evidence : {s['subjects']}")
+    print(f"Accepted evidence rows : {total}")
+    print(f"Avg evidence / subject : {total / covered:.1f}")
+    for t, v in s["by_type"].items():
+        print(f"    {t:12} {v['rows']} rows across {v['subjects']} subjects "
+              f"({v['rows'] / (v['subjects'] or 1):.1f}/subj)")
+
+    run = await db.last_run_stats("evidence")
+    if run and run.get("discovered"):
+        disc, kept = run["discovered"], run.get("extracted", 0)
+        print(f"\nLast run funnel        : {disc} discovered -> {kept} stored "
+              f"({100 * kept / disc:.1f}% acceptance)")
+        for reason, n in sorted(run.get("skipped", {}).items(), key=lambda kv: -kv[1]):
+            if n:
+                print(f"    - {reason:20} {n}")
+
+    tier_total = sum(s["by_tier"].values())
+    print(f"\nSource tier distribution (of {tier_total} tiered rows):")
+    _distbar(s["by_tier"], tier_total)
+    cat_total = sum(s["by_category"].values())
+    print(f"\nCategory distribution (of {cat_total} category tags):")
+    _distbar(s["by_category"], cat_total)
+    print("\nSentiment:")
+    _distbar(s["by_sentiment"], total)
+    print("\nBy extractor model:")
+    _distbar(s["by_model"], total)
+
+    print(f"\nNotes: avg confidence = {s['avg_confidence']} (flat external prior - "
+          "per-row quality scoring not yet built). Dedup is content-hash at fetch "
+          "time; claim-level canonicalization across sources is a future step. Tier/"
+          "category coverage applies to v2 rows (extractor_version 2.0.0).")
 
 
 async def coverage_report(n_org: int = 100, n_person: int = 100) -> None:
