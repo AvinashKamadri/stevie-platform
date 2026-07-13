@@ -24,7 +24,10 @@ _pool: AsyncConnectionPool | None = None
 async def pool() -> AsyncConnectionPool:
     global _pool
     if _pool is None:
-        _pool = AsyncConnectionPool(DATABASE_URL, open=False, kwargs={"row_factory": dict_row})
+        # max_size headroom so the concurrent evidence crawl (several subjects in
+        # flight, each doing sequential DB ops) doesn't starve on connections.
+        _pool = AsyncConnectionPool(DATABASE_URL, open=False, min_size=4, max_size=16,
+                                    kwargs={"row_factory": dict_row})
         await _pool.open()
     return _pool
 
@@ -375,6 +378,17 @@ async def evidence_exists(subject_type: str, subject_slug: str, url: str) -> boo
             "select 1 from winner_evidence where subject_type=%s and subject_slug=%s "
             "and source_url=%s limit 1", (subject_type, subject_slug, url))
         return (await cur.fetchone()) is not None
+
+
+async def evidence_done_subjects() -> set[tuple[str, str]]:
+    """(subject_type, subject_slug) pairs that already have >=1 evidence row.
+    Lets build() skip already-covered subjects on resume without re-searching —
+    turns the checkpoint from 're-scan everything' into an instant skip."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select distinct subject_type, subject_slug from winner_evidence")
+        return {(r["subject_type"], r["subject_slug"]) for r in await cur.fetchall()}
 
 
 async def insert_winner_evidence(*, subject: dict, url: str, source_type: str | None,
