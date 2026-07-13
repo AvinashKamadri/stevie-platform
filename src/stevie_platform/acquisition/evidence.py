@@ -660,45 +660,28 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
     if hasattr(extractor, "detect_rate_limit"):
         detected = await extractor.detect_rate_limit()
 
-    # #3 URL-level concurrency. With 12+ queries/subject the per-subject sequential
-    # fetch+extract was the bottleneck, so discover all pending subjects, flatten to
-    # (subject, hit) work items, then process URLs through ONE global pool -- keeps
-    # `conc` URLs in flight regardless of how they're distributed across subjects.
+    # #3 PIPELINED URL-level concurrency. Each subject's URLs are processed as soon
+    # as THAT subject's discovery returns -- no global barrier. Rows (and the
+    # dashboard) start moving immediately, one stuck search never blocks the whole
+    # run, and a live ETA is possible. A global URL semaphore bounds fetch+extract
+    # across all subjects; a discovery semaphore bounds concurrent searches.
     conc = max(1, int(os.environ.get("STEVIE_EVIDENCE_CONCURRENCY") or 8))
     disc_conc = max(1, int(os.environ.get("STEVIE_EVIDENCE_DISCOVERY_CONCURRENCY") or 8))
     cap = getattr(getattr(extractor, "_budget", None), "cap", None)
+    print(f"[evidence] {len(subjects)} subjects; {len(pending)} pending "
+          f"({len(subjects) - len(pending)} done); pipelined discovery={discovery.name} "
+          f"extractor={extractor.name} conc={conc} disc={disc_conc} tpm={cap}"
+          + (f" (detected {detected})" if detected else ""))
 
     name_gate = os.environ.get("STEVIE_EVIDENCE_NAME_GATE", "on").lower() != "off"
-    counts = {"discovered": 0, "stored": 0}
+    counts = {"discovered": 0, "stored": 0, "subjects_done": 0}
     skipped = {"junk_url": 0, "tier_e": 0, "already_stored": 0, "fetch_fail": 0,
                "low_text": 0, "dup_content": 0, "no_subject_mention": 0,
                "extract_fail": 0, "discover_fail": 0,
                "subject_skip": len(subjects) - len(pending)}
     seen_hashes: set[str] = set()
-
-    # Phase A -- discover all pending subjects concurrently (Tavily is fast).
-    print(f"[evidence] discovering {len(pending)} pending subjects "
-          f"(of {len(subjects)}) ...")
-    disc_sem = asyncio.Semaphore(disc_conc)
-
-    async def _discover(s: dict):
-        async with disc_sem:
-            try:
-                return s, await discovery.discover(s)
-            except Exception as e:        # a flaky search skips the subject, not the crawl
-                skipped["discover_fail"] += 1
-                print(f"[evidence] discover_fail {s['subject_slug']}: "
-                      f"{type(e).__name__}: {e}")
-                return s, []
-
-    discovered = await asyncio.gather(*(_discover(s) for s in pending))
-    work = [(s, hit) for s, hits in discovered for hit in hits]
-    counts["discovered"] = len(work)
-    print(f"[evidence] {len(work)} URLs discovered; extractor={extractor.name} "
-          f"conc={conc} tpm={cap}" + (f" (detected {detected})" if detected else ""))
-
-    # Phase B -- process each (subject, hit) through a global URL-level semaphore.
-    sem = asyncio.Semaphore(conc)
+    sem = asyncio.Semaphore(conc)             # URL-level fetch+extract
+    disc_sem = asyncio.Semaphore(disc_conc)   # per-subject discovery
 
     async with HttpxFetcher() as fetcher:
         async def handle(s: dict, hit: Hit) -> None:
@@ -748,11 +731,26 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                     raw_page_id=raw_id, crawl_run_id=crawl_run_id)
                 counts["stored"] += 1
 
-        results = await asyncio.gather(*(handle(s, hit) for s, hit in work),
+        async def process_subject(s: dict) -> None:
+            async with disc_sem:                     # bound concurrent searches
+                try:
+                    hits = await discovery.discover(s)
+                except Exception as e:               # a flaky search skips the subject
+                    skipped["discover_fail"] += 1
+                    print(f"[evidence] discover_fail {s['subject_slug']}: "
+                          f"{type(e).__name__}: {e}")
+                    hits = []
+            counts["discovered"] += len(hits)
+            if hits:                                 # process this subject's URLs now
+                await asyncio.gather(*(handle(s, hit) for hit in hits),
+                                     return_exceptions=True)
+            counts["subjects_done"] += 1
+
+        results = await asyncio.gather(*(process_subject(s) for s in pending),
                                        return_exceptions=True)
-    for (s, hit), r in zip(work, results):
-        if isinstance(r, Exception):          # unexpected per-URL failure -- log, don't abort
-            print(f"[evidence] url_error {s['subject_slug']} {hit.url}: "
+    for s, r in zip(pending, results):
+        if isinstance(r, Exception):          # unexpected per-subject failure -- log, don't abort
+            print(f"[evidence] subject_error {s['subject_slug']}: "
                   f"{type(r).__name__}: {r}")
 
     elapsed = round(time.monotonic() - t0, 1)
