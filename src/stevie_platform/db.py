@@ -418,6 +418,9 @@ async def evidence_summary() -> dict:
             "where extracted ? 'sentiment' group by 1 order by 2 desc")}
         out["by_model"] = {(x["m"] or "?"): x["n"] for x in await rows(
             "select extractor_model m, count(*) n from winner_evidence group by 1 order by 2 desc")}
+        out["unique_domains"] = (await rows(
+            "select count(distinct regexp_replace(split_part(split_part(source_url,'//',2),"
+            "'/',1),'^www\\.','')) n from winner_evidence"))[0]["n"]
     return out
 
 

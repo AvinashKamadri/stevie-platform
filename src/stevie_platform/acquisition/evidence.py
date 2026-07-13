@@ -98,6 +98,8 @@ class HttpxFetcher:
         self._rate = rate or AdaptiveRate()
         self._proxies = _load_proxies()
         self._clients: list[httpx.AsyncClient] = []   # [direct, proxy1, proxy2, ...]
+        # benchmark telemetry: how fetches resolved (direct vs proxy-recovered vs lost)
+        self.stats = {"direct_ok": 0, "proxy_recovered": 0, "fail": 0}
 
     async def __aenter__(self):
         opts = dict(timeout=HTTP_TIMEOUT_S, follow_redirects=True, headers=_BROWSER_HEADERS)
@@ -118,10 +120,12 @@ class HttpxFetcher:
             except Exception:  # noqa: BLE001 — one bad URL/proxy must not kill the run
                 continue
             if r.status_code == 200:
-                self._rate.on_ok()              # i>0 means a proxy recovered a blocked page
+                self._rate.on_ok()
+                self.stats["proxy_recovered" if i else "direct_ok"] += 1
                 return Document(url=url, status=200, html=r.content,
                                 text=html_to_text(r.content))
         self._rate.on_block()                   # exhausted direct + all proxies
+        self.stats["fail"] += 1
         return None
 
 
@@ -324,6 +328,7 @@ class ClaudeExtractor:
         # structured-parse task — Sonnet/Haiku cut cost ~3-5x at scale.
         self.model = model or os.environ.get("STEVIE_EVIDENCE_MODEL") or "claude-opus-4-8"
         self._budget = _TokenBudget(_TOKENS_PER_MIN)
+        self.usage = {"in": 0, "out": 0}          # benchmark: accumulated token usage
 
     async def detect_rate_limit(self) -> int | None:
         """Probe the account's real input-tokens/min limit from the response
@@ -359,6 +364,10 @@ class ClaudeExtractor:
             messages=[{"role": "user", "content": prompt}],
             output_format=EvidenceExtraction,
         )
+        u = getattr(resp, "usage", None)
+        if u:
+            self.usage["in"] += getattr(u, "input_tokens", 0) or 0
+            self.usage["out"] += getattr(u, "output_tokens", 0) or 0
         return resp.parsed_output.model_dump()
 
 
@@ -380,6 +389,7 @@ class GrokExtractor:
         # xAI limits are huge (tens of millions of tokens); throttling is a non-issue.
         # detect_rate_limit() raises the cap to the account's real ceiling.
         self._budget = _TokenBudget(_TOKENS_PER_MIN)
+        self.usage = {"in": 0, "out": 0}          # benchmark: accumulated token usage
 
     async def detect_rate_limit(self) -> int | None:
         """Read xAI's token ceiling (x-ratelimit-limit-tokens) and raise the budget
@@ -410,6 +420,10 @@ class GrokExtractor:
             messages=[{"role": "user", "content": prompt}],
             response_format=EvidenceExtraction,
         )
+        u = getattr(resp, "usage", None)
+        if u:
+            self.usage["in"] += getattr(u, "prompt_tokens", 0) or 0
+            self.usage["out"] += getattr(u, "completion_tokens", 0) or 0
         parsed = resp.choices[0].message.parsed
         # Guard against a refusal/empty parse — return the empty-shape schema.
         return parsed.model_dump() if parsed else {
@@ -580,6 +594,7 @@ def subject_mentioned(text: str, name: str, subject_type: str = "organization",
 # --- orchestration ------------------------------------------------------------
 async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                 url_map: dict | None = None) -> dict:
+    t0 = time.monotonic()
     discovery = get_discovery()
     if isinstance(discovery, StaticDiscovery):
         discovery.url_map = url_map or await db.get_meta("evidence_urls") or {}
@@ -697,11 +712,16 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
             print(f"[evidence] url_error {s['subject_slug']} {hit.url}: "
                   f"{type(r).__name__}: {r}")
 
+    elapsed = round(time.monotonic() - t0, 1)
+    usage = getattr(extractor, "usage", {"in": 0, "out": 0})
+    fstats = fetcher.stats
     print(f"[evidence] discovered={counts['discovered']} extracted={counts['stored']} "
-          f"skipped={skipped} (extractor={extractor.name}/{getattr(extractor, 'model', None)})")
+          f"skipped={skipped} fetch={fstats} tokens={usage} elapsed={elapsed}s "
+          f"(extractor={extractor.name}/{getattr(extractor, 'model', None)})")
     return {"subjects": len(subjects), "pending": len(pending),
             "discovered": counts["discovered"], "extracted": counts["stored"],
-            "skipped": skipped}
+            "skipped": skipped, "fetch": fstats, "tokens": usage,
+            "elapsed_sec": elapsed, "model": getattr(extractor, "model", None)}
 
 
 async def subjects_report(n_org: int = 20, n_person: int = 20) -> None:
@@ -771,6 +791,88 @@ async def summary_report() -> None:
           "per-row quality scoring not yet built). Dedup is content-hash at fetch "
           "time; claim-level canonicalization across sources is a future step. Tier/"
           "category coverage applies to v2 rows (extractor_version 2.0.0).")
+
+
+def _median(xs: list[int]) -> float:
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    m = len(s) // 2
+    return float(s[m]) if len(s) % 2 else (s[m - 1] + s[m]) / 2
+
+
+async def benchmark_report(n_org: int = 100, n_person: int = 0) -> None:
+    """Canonical benchmark for the corpus + the most-recent crawl run — the fixed
+    baseline to compare future crawler versions against. Metrics that need run-time
+    telemetry (proxy recovery, tokens, duration) come from the last run's stats;
+    coverage/median/domains/distributions are computed live from the corpus.
+    Grok pricing is an ESTIMATE (override STEVIE_GROK_PRICE_IN/OUT $/1M tokens)."""
+    s = await db.evidence_summary()
+    counts = await db.evidence_counts_by_subject()
+    run = await db.last_run_stats("evidence") or {}
+    org_rows, person_rows = await db.evidence_subjects(n_org, n_person)
+    subs = rank_subjects(org_rows, person_rows)
+
+    # per-subject density for the graded scope (default: orgs)
+    per = []
+    met = 0
+    for x in subs:
+        n = counts.get((x["subject_type"], x["subject_slug"]), {"n": 0})["n"]
+        good, _stretch, _lbl = _density_target(x["subject_type"], x["recognitions"])
+        per.append(n)
+        met += n >= good
+    processed = len(subs)
+    covered = sum(1 for n in per if n > 0)
+    avg = sum(per) / covered if covered else 0
+    med = _median([n for n in per if n > 0])
+    coverage_pct = 100 * met / processed if processed else 0
+
+    extracted = run.get("extracted", 0)
+    after_total = s["total"]
+    before_total = after_total - extracted            # extracted = net new inserts this run
+    sk = run.get("skipped", {})
+    fetch = run.get("fetch", {})
+    fetched_ok = fetch.get("direct_ok", 0) + fetch.get("proxy_recovered", 0)
+    fetch_attempts = fetched_ok + fetch.get("fail", 0)
+    fetch_rate = 100 * fetched_ok / fetch_attempts if fetch_attempts else 0
+    dup = sk.get("dup_content", 0)
+    dup_rate = 100 * dup / (dup + fetched_ok) if (dup + fetched_ok) else 0
+    tok = run.get("tokens", {"in": 0, "out": 0})
+    price_in = float(os.environ.get("STEVIE_GROK_PRICE_IN") or 3.0)    # $/1M tok (est.)
+    price_out = float(os.environ.get("STEVIE_GROK_PRICE_OUT") or 15.0)
+    cost = tok.get("in", 0) / 1e6 * price_in + tok.get("out", 0) / 1e6 * price_out
+    cost_per = cost / extracted if extracted else 0
+    dur = run.get("elapsed_sec", 0)
+
+    tier_total = sum(s["by_tier"].values()) or 1
+    cat_total = sum(s["by_category"].values()) or 1
+
+    print("=== Evidence Crawler Benchmark ===")
+    print(f"Model / scope          : {run.get('model', '?')}  |  {processed} subjects graded")
+    print(f"Evidence before -> after: {before_total} -> {after_total}  (+{extracted})")
+    print(f"Avg evidence / subject : {avg:.1f}   (median {med:.0f}, covered {covered}/{processed})")
+    print(f"Coverage vs target     : {coverage_pct:.0f}%  ({met}/{processed} at target)")
+    print(f"Unique source domains  : {s['unique_domains']}")
+    print(f"Fetch success rate     : {fetch_rate:.0f}%  "
+          f"(direct {fetch.get('direct_ok', 0)}, proxy-recovered {fetch.get('proxy_recovered', 0)}, "
+          f"lost {fetch.get('fail', 0)})")
+    print(f"Proxy recovery         : {fetch.get('proxy_recovered', 0)} URLs")
+    print(f"Duplicate collapse     : {dup_rate:.0f}%  ({dup} of {dup + fetched_ok} fetched)")
+    print(f"Avg confidence         : {s['avg_confidence']} (flat prior - not yet scored)")
+    print(f"Crawl duration         : {dur/60:.1f} min")
+    print(f"Tokens (in/out)        : {tok.get('in', 0):,} / {tok.get('out', 0):,}")
+    print(f"Est. cost              : ${cost:.2f}  (~${cost_per:.4f}/accepted evidence)")
+    print(f"  pricing assumption   : ${price_in}/M in, ${price_out}/M out (override "
+          "STEVIE_GROK_PRICE_IN/OUT; verify vs xAI billing)")
+    print(f"\nSource tier distribution (of {tier_total} tiered rows):")
+    _distbar(s["by_tier"], tier_total)
+    print(f"\nCategory distribution (of {cat_total} tags):")
+    _distbar(s["by_category"], cat_total)
+    if sk:
+        print("\nLast-run funnel skips:")
+        for reason, n in sorted(sk.items(), key=lambda kv: -kv[1]):
+            if n:
+                print(f"    {reason:20} {n}")
 
 
 async def coverage_report(n_org: int = 100, n_person: int = 100) -> None:
