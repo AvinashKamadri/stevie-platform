@@ -199,13 +199,17 @@ class TavilyDiscovery:
         self._max = max_results or int(os.environ.get("STEVIE_EVIDENCE_MAX_RESULTS") or 10)
         self._n = n_queries or int(os.environ.get("STEVIE_EVIDENCE_QUERIES") or 12)
         self._depth = depth or os.environ.get("STEVIE_EVIDENCE_SEARCH_DEPTH") or "basic"
+        # GLOBAL cap on concurrent Tavily calls across ALL subjects+queries. Without
+        # it, disc_conc x n_queries (e.g. 8x12) burst ~100 requests at once -> 429.
+        self._sem = asyncio.Semaphore(int(os.environ.get("STEVIE_TAVILY_CONCURRENCY") or 4))
 
     async def _search(self, query: str) -> list[dict]:
-        """One Tavily query with backoff on transient network errors."""
+        """One Tavily query, globally throttled, with 429/5xx backoff that honors
+        Retry-After. Tavily rate-limits hard, so pacing beats bursting."""
         last_exc = None
-        for attempt in range(3):
+        for attempt in range(5):
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with self._sem, httpx.AsyncClient(timeout=30.0) as client:
                     # Bearer-only auth: api_key in the body too makes Tavily return
                     # /goto redirect URLs instead of the real page URLs.
                     r = await client.post(
@@ -213,12 +217,22 @@ class TavilyDiscovery:
                         headers={"Authorization": f"Bearer {self._key}"},
                         json={"query": query, "max_results": self._max,
                               "search_depth": self._depth})
-                    r.raise_for_status()
-                    return r.json().get("results", [])
-            except (httpx.TransportError, httpx.HTTPStatusError) as e:
+                r.raise_for_status()
+                return r.json().get("results", [])
+            except httpx.HTTPStatusError as e:
                 last_exc = e
-                if attempt < 2:
+                code = e.response.status_code
+                if code in (429, 432, 500, 502, 503, 504) and attempt < 4:
+                    ra = float(e.response.headers.get("retry-after") or 0)
+                    await asyncio.sleep(max(ra, 3 * (attempt + 1)))
+                    continue
+                raise
+            except httpx.TransportError as e:
+                last_exc = e
+                if attempt < 4:
                     await asyncio.sleep(2 * (attempt + 1))
+                    continue
+                raise
         raise last_exc
 
     async def discover(self, subject: dict) -> list[Hit]:
