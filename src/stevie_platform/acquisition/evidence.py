@@ -193,28 +193,37 @@ class TavilyDiscovery:
     (how many angles), STEVIE_EVIDENCE_SEARCH_DEPTH (basic|advanced)."""
     name = "tavily"
 
-    def __init__(self, api_key: str, max_results: int | None = None,
+    def __init__(self, api_keys, max_results: int | None = None,
                  n_queries: int | None = None, depth: str | None = None):
-        self._key = api_key
+        # Accept one key or several; rotating across keys multiplies both the quota
+        # and the rate-limit headroom (each key has its own plan allowance).
+        self._keys = [api_keys] if isinstance(api_keys, str) else [k for k in api_keys if k]
+        self._key_rr = 0
         self._max = max_results or int(os.environ.get("STEVIE_EVIDENCE_MAX_RESULTS") or 10)
         self._n = n_queries or int(os.environ.get("STEVIE_EVIDENCE_QUERIES") or 12)
         self._depth = depth or os.environ.get("STEVIE_EVIDENCE_SEARCH_DEPTH") or "basic"
         # GLOBAL cap on concurrent Tavily calls across ALL subjects+queries. Without
         # it, disc_conc x n_queries (e.g. 8x12) burst ~100 requests at once -> 429.
-        self._sem = asyncio.Semaphore(int(os.environ.get("STEVIE_TAVILY_CONCURRENCY") or 4))
+        # Scales with key count (~4 concurrent per key).
+        default_conc = 4 * max(1, len(self._keys))
+        self._sem = asyncio.Semaphore(int(os.environ.get("STEVIE_TAVILY_CONCURRENCY") or default_conc))
 
     async def _search(self, query: str) -> list[dict]:
-        """One Tavily query, globally throttled, with 429/5xx backoff that honors
-        Retry-After. Tavily rate-limits hard, so pacing beats bursting."""
+        """One Tavily query, globally throttled, rotating across API keys, with
+        429/5xx backoff that honors Retry-After. Tavily rate-limits hard, so pacing
+        + key rotation beats bursting; a 429/432 on one key retries on the next."""
         last_exc = None
+        self._key_rr += 1
+        nk = len(self._keys)
         for attempt in range(5):
+            key = self._keys[(self._key_rr + attempt) % nk]      # rotate key per attempt
             try:
                 async with self._sem, httpx.AsyncClient(timeout=30.0) as client:
                     # Bearer-only auth: api_key in the body too makes Tavily return
                     # /goto redirect URLs instead of the real page URLs.
                     r = await client.post(
                         "https://api.tavily.com/search",
-                        headers={"Authorization": f"Bearer {self._key}"},
+                        headers={"Authorization": f"Bearer {key}"},
                         json={"query": query, "max_results": self._max,
                               "search_depth": self._depth})
                 r.raise_for_status()
@@ -265,11 +274,14 @@ def get_discovery() -> object:
     if prov == "static":
         return StaticDiscovery()  # caller injects url_map
     if prov == "tavily":
-        key = os.environ.get("TAVILY_API_KEY") or os.environ.get("CRAWL_KEY")
-        if not key:
+        # All configured Tavily keys, rotated to pool their quota + rate limits.
+        keys = [k for k in (os.environ.get("TAVILY_API_KEY"), os.environ.get("CRAWL_KEY"),
+                            os.environ.get("CRAWL_KEY_TWO"), os.environ.get("CRAWL_KEY_THREE"))
+                if k]
+        if not keys:
             raise RuntimeError("STEVIE_EVIDENCE_DISCOVERY=tavily but no "
-                               "TAVILY_API_KEY / CRAWL_KEY in the environment")
-        return TavilyDiscovery(key)
+                               "TAVILY_API_KEY / CRAWL_KEY(_TWO/_THREE) in the environment")
+        return TavilyDiscovery(keys)
     raise NotImplementedError(
         f"discovery provider '{prov}' needs a search-API key + adapter "
         "(google_cse / bing / serpapi); not wired yet")
