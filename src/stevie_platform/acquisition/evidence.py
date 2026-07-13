@@ -323,6 +323,24 @@ class EvidenceExtraction(BaseModel):
     sentiment: str
     summary: str
 
+
+# --- v3 grok_search: one item per cited source Grok found+used itself -----------
+class GrokEvidenceItem(BaseModel):
+    """One evidence item Grok produced from a source it searched/browsed itself.
+    Same fields as EvidenceExtraction plus the source it cited."""
+    source_url: str
+    source_title: str
+    themes: list[str]
+    categories: list[str]
+    quoted_metrics: list[str]
+    quotes: list[str]
+    sentiment: str
+    summary: str
+
+
+class GrokEvidenceBundle(BaseModel):
+    items: list[GrokEvidenceItem]
+
 _MAX_EXTRACT_CHARS = 16000
 # Input-token/minute cap. STEVIE_EVIDENCE_TPM pins it explicitly; otherwise this is
 # just a conservative floor that detect_rate_limit() raises to the account's real
@@ -472,6 +490,52 @@ class GrokExtractor:
         return parsed.model_dump() if parsed else {
             "themes": [], "categories": [], "quoted_metrics": [], "quotes": [],
             "sentiment": "neutral", "summary": ""}
+
+
+_RESEARCH_PROMPT = (
+    "You are researching {name} ({stype}), a Stevie Awards winner. Search the web "
+    "for evidence of this subject's achievements, growth, recognition, awards, "
+    "leadership, innovation, partnerships, financials, and impact. Return one "
+    "evidence item per distinct credible source you actually used. For each: the "
+    "real source URL, a short title, themes, categories (ONLY from this list: {cats}), "
+    "quoted_metrics (verbatim numbers), quotes (verbatim short quotes), sentiment "
+    "(positive/neutral/negative), and a 1-2 sentence summary. Only include facts the "
+    "source genuinely supports about THIS subject; skip pages that are not about it. "
+    "Aim for {target} items from distinct reputable sources.")
+
+
+class GrokResearcher:
+    """v3 discovery+extraction in one call: Grok searches & browses the web itself
+    (xAI Responses API + built-in web_search tool) and returns cited, structured
+    evidence items. Bypasses Tavily and the fetch layer entirely — no search-quota
+    or 403 bottleneck. Key from XAI_API_KEY / GROK_API_KEY / API_KEY."""
+    name = "grok_search"
+
+    def __init__(self, model: str | None = None):
+        from openai import AsyncOpenAI
+        key = (os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
+               or os.environ.get("API_KEY"))
+        self._client = AsyncOpenAI(api_key=key, base_url="https://api.x.ai/v1",
+                                   timeout=240.0, max_retries=3)
+        self.model = model or os.environ.get("STEVIE_EVIDENCE_MODEL") or "grok-4"
+        self._target = int(os.environ.get("STEVIE_EVIDENCE_TARGET_ITEMS") or 15)
+        self.usage = {"in": 0, "out": 0}
+
+    async def research(self, subject: dict) -> list[dict]:
+        prompt = _RESEARCH_PROMPT.format(
+            name=subject["name"], stype=subject["subject_type"],
+            cats=", ".join(_EVIDENCE_CATEGORIES), target=self._target)
+        resp = await self._client.responses.parse(
+            model=self.model, input=prompt,
+            tools=[{"type": "web_search"}],
+            text_format=GrokEvidenceBundle,
+        )
+        u = getattr(resp, "usage", None)
+        if u:
+            self.usage["in"] += getattr(u, "input_tokens", 0) or 0
+            self.usage["out"] += getattr(u, "output_tokens", 0) or 0
+        bundle = resp.output_parsed
+        return [it.model_dump() for it in bundle.items] if bundle else []
 
 
 def get_extractor() -> object:
@@ -637,6 +701,9 @@ def subject_mentioned(text: str, name: str, subject_type: str = "organization",
 # --- orchestration ------------------------------------------------------------
 async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                 url_map: dict | None = None) -> dict:
+    # v3: Grok-native research (search+extract in one call) — no Tavily/fetch.
+    if os.environ.get("STEVIE_EVIDENCE_DISCOVERY", "").lower() == "grok_search":
+        return await research_build(crawl_run_id, n_org, n_person)
     t0 = time.monotonic()
     discovery = get_discovery()
     if isinstance(discovery, StaticDiscovery):
@@ -763,6 +830,83 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
             "discovered": counts["discovered"], "extracted": counts["stored"],
             "skipped": skipped, "fetch": fstats, "tokens": usage,
             "elapsed_sec": elapsed, "model": getattr(extractor, "model", None)}
+
+
+async def research_build(crawl_run_id: uuid.UUID, n_org: int = 20,
+                         n_person: int = 20) -> dict:
+    """v3 build: one Grok web-search call per subject returns cited, structured
+    evidence items — stored directly. No Tavily, no fetch, no proxy. Subjects run
+    concurrently (bounded); each item deduped on source_url and tiered."""
+    t0 = time.monotonic()
+    researcher = GrokResearcher()
+    org_rows, person_rows = await db.evidence_subjects(n_org, n_person)
+    subjects = rank_subjects(org_rows, person_rows)
+
+    skip_done = os.environ.get("STEVIE_EVIDENCE_SKIP_DONE", "on").lower() != "off"
+    done = await db.evidence_done_subjects() if skip_done else set()
+    pending = [s for s in subjects
+               if (s["subject_type"], s["subject_slug"]) not in done]
+
+    conc = max(1, int(os.environ.get("STEVIE_EVIDENCE_CONCURRENCY") or 6))
+    name_gate = os.environ.get("STEVIE_EVIDENCE_NAME_GATE", "on").lower() != "off"
+    counts = {"items": 0, "stored": 0, "subjects_done": 0}
+    skipped = {"no_url": 0, "already_stored": 0, "no_subject_mention": 0,
+               "research_fail": 0, "subject_skip": len(subjects) - len(pending)}
+    print(f"[research] {len(subjects)} subjects; {len(pending)} pending; "
+          f"model={researcher.model} conc={conc} (grok web_search, no Tavily/fetch)")
+    sem = asyncio.Semaphore(conc)
+
+    async def process(s: dict) -> None:
+        async with sem:
+            try:
+                items = await researcher.research(s)
+            except Exception as e:            # one subject's failure must not kill the run
+                skipped["research_fail"] += 1
+                print(f"[research] research_fail {s['subject_slug']}: "
+                      f"{type(e).__name__}: {str(e)[:150]}")
+                return
+        for it in items:
+            counts["items"] += 1
+            url = (it.get("source_url") or "").strip()
+            if not url or not url.startswith("http"):
+                skipped["no_url"] += 1
+                continue
+            if name_gate and not subject_mentioned(
+                    it.get("summary", "") + " " + " ".join(it.get("quotes", [])),
+                    s.get("name", ""), s["subject_type"], url=url):
+                skipped["no_subject_mention"] += 1
+                continue
+            if await db.evidence_exists(s["subject_type"], s["subject_slug"], url):
+                skipped["already_stored"] += 1
+                continue
+            content = (it.get("summary", "") + "\n" + "\n".join(it.get("quotes", []))).strip()
+            extracted = {k: it.get(k) for k in
+                         ("themes", "categories", "quoted_metrics", "quotes", "sentiment", "summary")}
+            await db.insert_winner_evidence(
+                subject=s, url=url, source_type="grok_search",
+                content=content, extracted=extracted,
+                discovery="grok_search", extraction=researcher.name,
+                extractor_model=researcher.model,
+                extractor_version=EXTRACT_SCHEMA_VERSION,
+                source_tier=source_tier(url),
+                raw_page_id=None, crawl_run_id=crawl_run_id)
+            counts["stored"] += 1
+        counts["subjects_done"] += 1
+
+    results = await asyncio.gather(*(process(s) for s in pending), return_exceptions=True)
+    for s, r in zip(pending, results):
+        if isinstance(r, Exception):
+            print(f"[research] subject_error {s['subject_slug']}: {type(r).__name__}: {r}")
+
+    elapsed = round(time.monotonic() - t0, 1)
+    usage = researcher.usage
+    print(f"[research] items={counts['items']} stored={counts['stored']} "
+          f"subjects_done={counts['subjects_done']} skipped={skipped} tokens={usage} "
+          f"elapsed={elapsed}s (model={researcher.model})")
+    return {"subjects": len(subjects), "pending": len(pending),
+            "discovered": counts["items"], "extracted": counts["stored"],
+            "skipped": skipped, "tokens": usage, "elapsed_sec": elapsed,
+            "model": researcher.model}
 
 
 async def subjects_report(n_org: int = 20, n_person: int = 20) -> None:
