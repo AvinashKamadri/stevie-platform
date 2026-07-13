@@ -12,7 +12,7 @@ install:
 
 # Spin up Postgres locally via Docker (skip if you have your own).
 db:
-	docker run -d --name stevie-pg -p 5432:5432 \
+	docker run -d --name stevie-pg -p 5432:5432 --restart unless-stopped \
 	  -e POSTGRES_USER=stevie -e POSTGRES_PASSWORD=stevie -e POSTGRES_DB=stevie_platform \
 	  postgres:16
 
