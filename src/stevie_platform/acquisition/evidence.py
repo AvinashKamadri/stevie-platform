@@ -1023,8 +1023,9 @@ async def benchmark_report(n_org: int = 100, n_person: int = 0) -> None:
     dup = sk.get("dup_content", 0)
     dup_rate = 100 * dup / (dup + fetched_ok) if (dup + fetched_ok) else 0
     tok = run.get("tokens", {"in": 0, "out": 0})
-    price_in = float(os.environ.get("STEVIE_GROK_PRICE_IN") or 3.0)    # $/1M tok (est.)
-    price_out = float(os.environ.get("STEVIE_GROK_PRICE_OUT") or 15.0)
+    # grok-4 bills at $1.25/$2.50 per 1M (grok-4.5 tier is $2/$6). Override via env.
+    price_in = float(os.environ.get("STEVIE_GROK_PRICE_IN") or 1.25)
+    price_out = float(os.environ.get("STEVIE_GROK_PRICE_OUT") or 2.50)
     cost = tok.get("in", 0) / 1e6 * price_in + tok.get("out", 0) / 1e6 * price_out
     cost_per = cost / extracted if extracted else 0
     dur = run.get("elapsed_sec", 0)
