@@ -98,25 +98,42 @@ class HttpxFetcher:
         self._rate = rate or AdaptiveRate()
         self._proxies = _load_proxies()
         self._clients: list[httpx.AsyncClient] = []   # [direct, proxy1, proxy2, ...]
+        # Only try a FEW proxies per failed URL (rotated), on a SHORTER timeout --
+        # walking all N proxies at the full timeout made dead URLs ~N x slower and
+        # dominated throughput. A live proxy answers fast; 2 attempts recover most.
+        self._proxy_attempts = int(os.environ.get("STEVIE_PROXY_ATTEMPTS") or 2)
+        self._proxy_timeout = float(os.environ.get("STEVIE_PROXY_TIMEOUT") or 8.0)
+        self._rr = 0                                  # round-robin proxy start index
         # benchmark telemetry: how fetches resolved (direct vs proxy-recovered vs lost)
         self.stats = {"direct_ok": 0, "proxy_recovered": 0, "fail": 0}
 
     async def __aenter__(self):
-        opts = dict(timeout=HTTP_TIMEOUT_S, follow_redirects=True, headers=_BROWSER_HEADERS)
-        self._clients = [httpx.AsyncClient(**opts)]
-        self._clients += [httpx.AsyncClient(proxy=p, **opts) for p in self._proxies]
+        opts = dict(follow_redirects=True, headers=_BROWSER_HEADERS)
+        self._clients = [httpx.AsyncClient(timeout=HTTP_TIMEOUT_S, **opts)]
+        self._clients += [httpx.AsyncClient(proxy=p, timeout=self._proxy_timeout, **opts)
+                          for p in self._proxies]
         return self
 
     async def __aexit__(self, *exc):
         for c in self._clients:
             await c.aclose()
 
+    def _fetch_order(self) -> list[int]:
+        """Direct (0) first, then up to _proxy_attempts proxies, rotated per call so
+        load/geo spreads across the pool instead of always hitting the first two."""
+        order = [0]
+        n = len(self._proxies)
+        if n:
+            start = self._rr % n
+            self._rr += 1
+            order += [1 + (start + k) % n for k in range(min(self._proxy_attempts, n))]
+        return order
+
     async def fetch(self, url: str) -> Document | None:
         await self._rate.wait()
-        # Try direct, then each proxy in turn until a 200 comes back.
-        for i, client in enumerate(self._clients):
+        for i in self._fetch_order():
             try:
-                r = await client.get(url)
+                r = await self._clients[i].get(url)
             except Exception:  # noqa: BLE001 — one bad URL/proxy must not kill the run
                 continue
             if r.status_code == 200:
@@ -124,7 +141,7 @@ class HttpxFetcher:
                 self.stats["proxy_recovered" if i else "direct_ok"] += 1
                 return Document(url=url, status=200, html=r.content,
                                 text=html_to_text(r.content))
-        self._rate.on_block()                   # exhausted direct + all proxies
+        self._rate.on_block()                   # direct + sampled proxies all failed
         self.stats["fail"] += 1
         return None
 
