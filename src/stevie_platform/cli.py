@@ -103,7 +103,7 @@ async def _main(argv: list[str]) -> int:
     pl = sub.add_parser("people", help="milestone B: extract+resolve individuals from individual-award nominations")
     pl.add_argument("--report", action="store_true", help="print counts + top people (don't rebuild)")
     ev = sub.add_parser("evidence", help="crawler milestone: external Evidence Layer (pluggable discovery/fetch/extract)")
-    ev.add_argument("stage", choices=["subjects", "build", "report"])
+    ev.add_argument("stage", choices=["subjects", "build", "report", "coverage"])
     ev.add_argument("--orgs", type=int, default=20, help="number of top orgs to include (default 20)")
     ev.add_argument("--people", type=int, default=20, help="number of top people to include (default 20)")
     pp = sub.add_parser("parse")
@@ -230,6 +230,8 @@ async def _main(argv: list[str]) -> int:
                 print(f"[evidence] {rep['docs']} evidence docs")
                 for r in rep["by_type"]:
                     print(f"    {r['subject_type']:12} {r['n']}")
+            elif args.stage == "coverage":
+                await evidence.coverage_report(args.orgs, args.people)
             else:  # build
                 run_id = await db.start_crawl_run("evidence", git_commit=_git_commit())
                 await evidence.build(run_id, n_org=args.orgs, n_person=args.people)

@@ -32,7 +32,7 @@ from stevie_platform import db
 from stevie_platform.acquisition.fetch import AdaptiveRate
 from stevie_platform.config import HTTP_TIMEOUT_S
 
-EXTRACT_SCHEMA_VERSION = "1.0.0"
+EXTRACT_SCHEMA_VERSION = "2.0.0"   # 2.0.0: added categories[] (fixed taxonomy)
 
 # Evidence pages are arbitrary public news/company sites that block non-browser
 # clients. A realistic browser header set (not the Stevie crawler UA) cuts 403s.
@@ -79,34 +79,50 @@ def html_to_text(html: bytes) -> str:
     return re.sub(r"\s+", " ", root.text(separator=" ", strip=True)).strip()
 
 
+def _load_proxies() -> list[str]:
+    """Proxy URLs from STEVIE_PROXIES (comma/space/newline separated). Each like
+    http://user:pass@host:port. Empty list = direct-only."""
+    raw = os.environ.get("STEVIE_PROXIES", "")
+    return [p.strip() for p in re.split(r"[,\s]+", raw) if p.strip()]
+
+
 # --- Fetcher seam (httpx today; Scrapy/Playwright/Firecrawl later, same API) --
 class HttpxFetcher:
+    """Fetches a URL direct first; on failure (403/timeout — ~1 in 5 URLs) retries
+    through rotating proxies if STEVIE_PROXIES is set. Proxy retries recover
+    bot-blocked pages that a single client IP can't reach — the fetch-layer density
+    lever (distinct from the LLM bottleneck)."""
     name = "httpx"
 
     def __init__(self, rate: AdaptiveRate | None = None):
         self._rate = rate or AdaptiveRate()
-        self._client: httpx.AsyncClient | None = None
+        self._proxies = _load_proxies()
+        self._clients: list[httpx.AsyncClient] = []   # [direct, proxy1, proxy2, ...]
 
     async def __aenter__(self):
-        self._client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_S, follow_redirects=True,
-                                         headers=_BROWSER_HEADERS)
+        opts = dict(timeout=HTTP_TIMEOUT_S, follow_redirects=True, headers=_BROWSER_HEADERS)
+        self._clients = [httpx.AsyncClient(**opts)]
+        self._clients += [httpx.AsyncClient(proxy=p, **opts) for p in self._proxies]
         return self
 
     async def __aexit__(self, *exc):
-        await self._client.aclose()
+        for c in self._clients:
+            await c.aclose()
 
     async def fetch(self, url: str) -> Document | None:
         await self._rate.wait()
-        try:
-            r = await self._client.get(url)
-        except Exception:  # noqa: BLE001 — one bad URL must not kill the run
-            self._rate.on_block()
-            return None
-        if r.status_code != 200:
-            self._rate.on_block()
-            return None
-        self._rate.on_ok()
-        return Document(url=url, status=200, html=r.content, text=html_to_text(r.content))
+        # Try direct, then each proxy in turn until a 200 comes back.
+        for i, client in enumerate(self._clients):
+            try:
+                r = await client.get(url)
+            except Exception:  # noqa: BLE001 — one bad URL/proxy must not kill the run
+                continue
+            if r.status_code == 200:
+                self._rate.on_ok()              # i>0 means a proxy recovered a blocked page
+                return Document(url=url, status=200, html=r.content,
+                                text=html_to_text(r.content))
+        self._rate.on_block()                   # exhausted direct + all proxies
+        return None
 
 
 # --- Discovery seam (official search APIs plug in here; stubs need no key) -----
@@ -129,41 +145,82 @@ class StaticDiscovery:
                 for u in self.url_map.get(subject["subject_slug"], [])]
 
 
+# Multiple angled queries per subject widen coverage far more than one query at a
+# higher max_results — each angle surfaces a different slice (awards, growth,
+# leadership, press). Merged + URL-deduped downstream. Plain keyword strings only:
+# boolean OR operators make Tavily return /goto redirect URLs instead of real ones.
+_ORG_QUERIES = [
+    "{name} awards", "{name} Stevie Awards", "{name} recognition",
+    "{name} customer success", "{name} case study", "{name} innovation",
+    "{name} leadership", "{name} CEO", "{name} press release",
+    "{name} revenue growth", "{name} product launch", "{name} partnerships",
+    "{name} acquisitions", "{name} sustainability", "{name} Forbes",
+    "{name} Gartner", "{name} AI",
+]
+_PERSON_QUERIES = [
+    "{name} Stevie Awards", "{name} award", "{name} interview",
+    "{name} keynote", "{name} Forbes", "{name} article",
+    "{name} speaker", "{name} podcast", "{name} LinkedIn",
+]
+
+
 class TavilyDiscovery:
-    """Discovery via the Tavily Search API (official-API, ToS-safe). Reads the
-    key from TAVILY_API_KEY or CRAWL_KEY. One query per subject; returns Hits."""
+    """Discovery via the Tavily Search API (official-API, ToS-safe). Reads the key
+    from TAVILY_API_KEY / CRAWL_KEY. Runs several angled queries per subject
+    concurrently and merges the URL-deduped results — the primary density lever.
+    Tunables: STEVIE_EVIDENCE_MAX_RESULTS (per query), STEVIE_EVIDENCE_QUERIES
+    (how many angles), STEVIE_EVIDENCE_SEARCH_DEPTH (basic|advanced)."""
     name = "tavily"
 
-    def __init__(self, api_key: str, max_results: int = 8):
+    def __init__(self, api_key: str, max_results: int | None = None,
+                 n_queries: int | None = None, depth: str | None = None):
         self._key = api_key
-        self._max = max_results
+        self._max = max_results or int(os.environ.get("STEVIE_EVIDENCE_MAX_RESULTS") or 10)
+        self._n = n_queries or int(os.environ.get("STEVIE_EVIDENCE_QUERIES") or 12)
+        self._depth = depth or os.environ.get("STEVIE_EVIDENCE_SEARCH_DEPTH") or "basic"
 
-    async def discover(self, subject: dict) -> list[Hit]:
-        # Plain keyword query. Boolean OR operators make Tavily return /goto
-        # redirect URLs instead of real page URLs.
-        query = f'{subject["name"]} Stevie Awards achievements customer success'
-        # Retry transient network errors (ConnectTimeout etc.) with backoff — a
-        # single flaky search must not abort a multi-hour crawl.
+    async def _search(self, query: str) -> list[dict]:
+        """One Tavily query with backoff on transient network errors."""
         last_exc = None
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    # Bearer-only auth: sending api_key in the body too makes
-                    # Tavily return /goto redirect URLs instead of real URLs.
+                    # Bearer-only auth: api_key in the body too makes Tavily return
+                    # /goto redirect URLs instead of the real page URLs.
                     r = await client.post(
                         "https://api.tavily.com/search",
                         headers={"Authorization": f"Bearer {self._key}"},
                         json={"query": query, "max_results": self._max,
-                              "search_depth": "basic"})
+                              "search_depth": self._depth})
                     r.raise_for_status()
-                    results = r.json().get("results", [])
-                return [Hit(url=x["url"], title=x.get("title"), source_type="tavily")
-                        for x in results if x.get("url")]
+                    return r.json().get("results", [])
             except (httpx.TransportError, httpx.HTTPStatusError) as e:
                 last_exc = e
                 if attempt < 2:
                     await asyncio.sleep(2 * (attempt + 1))
         raise last_exc
+
+    async def discover(self, subject: dict) -> list[Hit]:
+        templates = (_PERSON_QUERIES if subject.get("subject_type") == "person"
+                     else _ORG_QUERIES)
+        queries = [t.format(name=subject["name"]) for t in templates[:self._n]]
+        results = await asyncio.gather(*(self._search(q) for q in queries),
+                                       return_exceptions=True)
+        # If every angle failed, surface it so build() logs discover_fail; a partial
+        # failure just contributes fewer URLs.
+        if results and all(isinstance(r, Exception) for r in results):
+            raise next(r for r in results if isinstance(r, Exception))
+        seen: set[str] = set()
+        hits: list[Hit] = []
+        for r in results:
+            if isinstance(r, Exception):
+                continue
+            for x in r:
+                u = x.get("url")
+                if u and u not in seen:
+                    seen.add(u)
+                    hits.append(Hit(url=u, title=x.get("title"), source_type="tavily"))
+        return hits
 
 
 def get_discovery() -> object:
@@ -192,18 +249,28 @@ class NullExtractor:
         return {}
 
 
+# Fixed taxonomy so the corpus is queryable by category downstream (drafting,
+# strength scoring, timelines) instead of free-form themes only.
+_EVIDENCE_CATEGORIES = [
+    "Leadership", "Awards", "Financial", "Innovation", "Customer Success",
+    "Partnership", "Expansion", "Product Launch", "ESG", "Research", "Patents",
+]
+
 _EXTRACT_PROMPT = (
     "You are extracting structured evidence about a Stevie Awards winner from a "
     "public web page. Subject: {name} ({stype}).\n\nPage text:\n{text}\n\n"
     "Extract only what the page actually supports about this subject's "
     "achievements, growth, recognition, and impact. If the page is not about the "
-    "subject, return empty lists and sentiment 'neutral'.")
+    "subject, return empty lists and sentiment 'neutral'.\n"
+    "Tag the evidence with any that apply from this fixed category list "
+    "(use these exact labels, omit any that don't apply): " + ", ".join(_EVIDENCE_CATEGORIES) + ".")
 
 
 class EvidenceExtraction(BaseModel):
     """Shared structured-output schema — same fields across every LLM backend so
     winner_evidence.extracted is provider-agnostic."""
     themes: list[str]
+    categories: list[str]          # subset of _EVIDENCE_CATEGORIES that the page supports
     quoted_metrics: list[str]
     quotes: list[str]
     sentiment: str
@@ -346,7 +413,7 @@ class GrokExtractor:
         parsed = resp.choices[0].message.parsed
         # Guard against a refusal/empty parse — return the empty-shape schema.
         return parsed.model_dump() if parsed else {
-            "themes": [], "quoted_metrics": [], "quotes": [],
+            "themes": [], "categories": [], "quoted_metrics": [], "quotes": [],
             "sentiment": "neutral", "summary": ""}
 
 
@@ -394,6 +461,44 @@ _JUNK_URL_RE = re.compile(
 def is_junk_url(url: str) -> bool:
     """Cheap pre-fetch filter: listing/nav/auth pages aren't evidence."""
     return bool(_JUNK_URL_RE.search(url))
+
+
+# --- source taxonomy (spend extraction budget where authority is highest) ------
+# Domain -> tier. A=authoritative/official, B=major press/analyst, C=professional
+# /general (default for unknowns), D=blogs/local, E=ignore (social/forums/UGC).
+_TIER_B = {"forbes.com", "gartner.com", "idc.com", "fortune.com", "reuters.com",
+    "bloomberg.com", "wsj.com", "ft.com", "cnbc.com", "businesswire.com",
+    "prnewswire.com", "globenewswire.com", "techcrunch.com", "hbr.org",
+    "economist.com", "nytimes.com", "theguardian.com", "inc.com",
+    "fastcompany.com", "venturebeat.com", "zdnet.com"}
+_TIER_D = {"medium.com", "wordpress.com", "blogspot.com", "substack.com",
+    "prlog.org", "openpr.com", "issuu.com"}
+_TIER_E = {"reddit.com", "quora.com", "pinterest.com", "facebook.com",
+    "twitter.com", "x.com", "tiktok.com", "instagram.com", "glassdoor.com",
+    "indeed.com", "scribd.com", "slideshare.net", "yelp.com"}
+
+
+def _registered_domain(url: str) -> str:
+    host = re.sub(r"^https?://", "", url or "").split("/")[0].split(":")[0].lower()
+    host = host[4:] if host.startswith("www.") else host
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def source_tier(url: str) -> str:
+    """Authority tier A>B>C>D>E for a URL, by registered domain."""
+    host = re.sub(r"^https?://", "", url or "").split("/")[0].lower()
+    dom = _registered_domain(url)
+    if host.endswith(".gov") or host.endswith(".edu") or "stevieawards.com" in host \
+            or "sec.gov" in host:
+        return "A"
+    if dom in _TIER_B:
+        return "B"
+    if dom in _TIER_E:
+        return "E"
+    if dom in _TIER_D:
+        return "D"
+    return "C"
 
 
 # --- name-presence gate (make entity resolution explicit, not implicit) -------
@@ -508,7 +613,7 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
 
     name_gate = os.environ.get("STEVIE_EVIDENCE_NAME_GATE", "on").lower() != "off"
     counts = {"discovered": 0, "stored": 0}
-    skipped = {"junk_url": 0, "already_stored": 0, "fetch_fail": 0,
+    skipped = {"junk_url": 0, "tier_e": 0, "already_stored": 0, "fetch_fail": 0,
                "low_text": 0, "dup_content": 0, "no_subject_mention": 0,
                "extract_fail": 0, "discover_fail": 0,
                "subject_skip": len(subjects) - len(pending)}
@@ -529,6 +634,10 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                     counts["discovered"] += 1
                     if is_junk_url(hit.url):                    # nav/listing pages
                         skipped["junk_url"] += 1
+                        continue
+                    tier = source_tier(hit.url)
+                    if tier == "E":                            # social/forums/UGC — don't pay to extract
+                        skipped["tier_e"] += 1
                         continue
                     if await db.evidence_exists(s["subject_type"], s["subject_slug"], hit.url):
                         skipped["already_stored"] += 1          # never re-extract stored
@@ -565,6 +674,7 @@ async def build(crawl_run_id: uuid.UUID, n_org: int = 20, n_person: int = 20,
                         discovery=discovery.name, extraction=extractor.name,
                         extractor_model=getattr(extractor, "model", None),
                         extractor_version=EXTRACT_SCHEMA_VERSION,
+                        source_tier=tier,
                         raw_page_id=raw_id, crawl_run_id=crawl_run_id)
                     counts["stored"] += 1
 
@@ -587,3 +697,51 @@ async def subjects_report(n_org: int = 20, n_person: int = 20) -> None:
     print(f"[evidence] {len(subs)} curated subjects ({n_org} orgs + {n_person} people):")
     for s in subs:
         print(f"    {s['recognitions']:4}  {s['subject_type']:12} {s['name']}")
+
+
+# Density targets by subject type + prominence (recognition-count proxy). Not a
+# flat 100 — reflects how much public evidence realistically exists per subject.
+def _density_target(subject_type: str, recognitions: int) -> tuple[int, int, str]:
+    """Returns (good, stretch, label) for a subject."""
+    if subject_type == "organization":
+        if recognitions >= 100:
+            return (50, 100, "major org")
+        return (20, 40, "mid org")
+    if recognitions >= 10:
+        return (30, 60, "known exec")
+    return (15, 30, "executive")
+
+
+async def coverage_report(n_org: int = 100, n_person: int = 100) -> None:
+    """Per-subject evidence density vs type-based targets — pinpoints which subjects
+    are sparse and where authority (tier A/B) is thin, instead of guessing."""
+    org_rows, person_rows = await db.evidence_subjects(n_org, n_person)
+    subs = rank_subjects(org_rows, person_rows)
+    counts = await db.evidence_counts_by_subject()
+
+    rows = []
+    for s in subs:
+        c = counts.get((s["subject_type"], s["subject_slug"]), {"n": 0, "ab": 0})
+        good, stretch, label = _density_target(s["subject_type"], s["recognitions"])
+        status = ("met" if c["n"] >= good else "partial" if c["n"] >= good / 2
+                  else "sparse" if c["n"] > 0 else "none")
+        rows.append({**s, "n": c["n"], "ab": c["ab"], "good": good,
+                     "label": label, "status": status})
+
+    met = sum(1 for r in rows if r["status"] == "met")
+    none = sum(1 for r in rows if r["status"] == "none")
+    total_rows = sum(r["n"] for r in rows)
+    total_ab = sum(r["ab"] for r in rows)
+    covered = [r for r in rows if r["n"] > 0]
+    avg = total_rows / len(covered) if covered else 0
+
+    print(f"[coverage] {len(rows)} subjects | {total_rows} evidence rows | "
+          f"avg {avg:.1f}/covered-subject")
+    print(f"[coverage] met target: {met}  |  below target: {len(rows)-met-none}  |  "
+          f"no evidence: {none}  |  tier A/B share: "
+          f"{(100*total_ab/total_rows if total_rows else 0):.0f}% (of tiered rows)")
+    print(f"[coverage] {'STATUS':8} {'TYPE':6} {'N':>4}/{'TGT':<4} {'A/B':>4}  {'LABEL':11} SUBJECT")
+    # worst first: largest gap to target, then lowest count
+    for r in sorted(rows, key=lambda r: (r["n"] - r["good"], r["n"]))[:60]:
+        print(f"           {r['status']:8} {r['subject_type'][:6]:6} "
+              f"{r['n']:>4}/{r['good']:<4} {r['ab']:>4}  {r['label']:11} {r['name'][:40]}")

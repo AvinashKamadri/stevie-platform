@@ -391,15 +391,30 @@ async def evidence_done_subjects() -> set[tuple[str, str]]:
         return {(r["subject_type"], r["subject_slug"]) for r in await cur.fetchall()}
 
 
+async def evidence_counts_by_subject() -> dict[tuple[str, str], dict]:
+    """Per (subject_type, subject_slug): accepted evidence count + tier A/B count.
+    Feeds the coverage report (density vs target, authority mix)."""
+    p = await pool()
+    async with p.connection() as conn:
+        cur = await conn.execute(
+            "select subject_type, subject_slug, count(*) n, "
+            "count(*) filter (where source_tier in ('A','B')) ab "
+            "from winner_evidence group by subject_type, subject_slug")
+        return {(r["subject_type"], r["subject_slug"]): {"n": r["n"], "ab": r["ab"]}
+                for r in await cur.fetchall()}
+
+
 async def insert_winner_evidence(*, subject: dict, url: str, source_type: str | None,
                                  content: str, extracted: dict, discovery: str,
                                  extraction: str, raw_page_id: int | None,
                                  crawl_run_id: uuid.UUID | None,
                                  extractor_model: str | None = None,
                                  extractor_version: str | None = None,
+                                 source_tier: str | None = None,
                                  confidence: float = 0.4) -> None:
     """Store one evidence doc. External prior (0.4) below blog/winner trust.
-    Records extraction provenance (model/version/extracted_at) for re-extraction."""
+    Records extraction provenance (model/version/extracted_at) for re-extraction
+    and source_tier (authority) for prioritized retrieval."""
     p = await pool()
     async with p.connection() as conn:
         await conn.execute(
@@ -407,13 +422,13 @@ async def insert_winner_evidence(*, subject: dict, url: str, source_type: str | 
                  (subject_type, subject_slug, subject_id, source_url, source_type,
                   content, extracted, confidence, discovery_provider,
                   extraction_method, extractor_model, extractor_version,
-                  extracted_at, raw_page_id, crawl_run_id)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now(),%s,%s)
+                  extracted_at, source_tier, raw_page_id, crawl_run_id)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now(),%s,%s,%s)
                on conflict (subject_type, subject_slug, source_url) do nothing""",
             (subject["subject_type"], subject["subject_slug"], subject.get("subject_id"),
              url, source_type, content, json.dumps(extracted or {}), confidence,
              discovery, extraction, extractor_model, extractor_version,
-             raw_page_id, str(crawl_run_id) if crawl_run_id else None))
+             source_tier, raw_page_id, str(crawl_run_id) if crawl_run_id else None))
 
 
 async def evidence_report() -> dict:
